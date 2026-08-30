@@ -8,6 +8,13 @@ __pycache__/
 .idea/
 .DS_Store
 .worktrees/
+qc-workspace/data/
+qc-workspace/storage/
+qc-workspace/**/.idea/
+qc-workspace/**/.vscode/
+qc-workspace/**/backtests/
+qc-workspace/**/research/
+qc-workspace/**/research.ipynb
 
 # Generated QuantConnect artifacts
 backtests/
