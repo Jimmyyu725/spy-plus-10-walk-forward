@@ -268,8 +268,8 @@ class CostModelTests(unittest.TestCase):
     def test_equity_commission_floor_and_half_spread(self):
         cost = equity_execution("BUY", 10, "100", bid="99.90", ask="100.10")
         self.assertEqual(cost.commission, Decimal("1.00"))
-        self.assertEqual(cost.fill_price, Decimal("100.05"))
-        self.assertEqual(cost.slippage, Decimal("0.50"))
+        self.assertEqual(cost.fill_price, Decimal("100.10"))
+        self.assertEqual(cost.slippage, Decimal("1.00"))
 
     def test_equity_uses_five_bps_when_larger(self):
         cost = equity_execution("SELL", 1000, "100", bid="99.99", ask="100.01")
