@@ -29,7 +29,7 @@ class PerContractFeeModel(FeeModel):
         return OrderFee(CashAmount(fee, "USD"))
 
 
-class OneTickSlippageModel(ISlippageModel):
+class OneTickSlippageModel:
     def get_slippage_approximation(self, asset, order):
         return asset.symbol_properties.minimum_price_variation
 

@@ -25,9 +25,10 @@ class FuturesSmokeSyncTests(unittest.TestCase):
         self.assertIn('"formal_evaluation": false', text)
         self.assertIn('"live_trading": false', text)
 
-    def test_smoke_uses_lean_slippage_interface(self):
+    def test_smoke_uses_python_slippage_wrapper_contract(self):
         source = (SMOKE / "main.py").read_text(encoding="utf-8")
-        self.assertIn("class OneTickSlippageModel(ISlippageModel):", source)
+        self.assertIn("class OneTickSlippageModel:", source)
+        self.assertNotIn("class OneTickSlippageModel(ISlippageModel):", source)
         self.assertNotIn("class OneTickSlippageModel(SlippageModel):", source)
 
 
