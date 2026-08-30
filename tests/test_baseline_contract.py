@@ -38,6 +38,18 @@ class BaselineContractTests(unittest.TestCase):
             with self.assertRaisesRegex(BaselineContractError, "contract mismatch"):
                 load_baseline_contract(path)
 
+    def test_cloud_main_imports_every_baseline_module(self):
+        source = (PROJECT_DIR / "main.py").read_text(encoding="utf-8")
+        for marker in (
+            "from audit import AuditTrail",
+            "from baseline import load_baseline_contract",
+            "from benchmark import PricePoint",
+            "from costs import equity_execution",
+            "from ledger import CashLedger",
+            "from metrics import EquityPoint",
+        ):
+            self.assertIn(marker, source)
+
 
 if __name__ == "__main__":
     unittest.main()
