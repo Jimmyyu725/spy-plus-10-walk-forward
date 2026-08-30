@@ -32,6 +32,8 @@ class OptionSmokeSyncTests(unittest.TestCase):
 
     def test_adapter_uses_atomic_combo_and_required_statistics(self):
         source = (SMOKE / "main.py").read_text(encoding="utf-8")
+        self.assertIn("BrokerageName.QUANT_CONNECT_BROKERAGE", source)
+        self.assertNotIn("BrokerageName.QUANTCONNECT_BROKERAGE", source)
         self.assertIn("combo_leg_limit_order", source)
         self.assertNotIn("market_order(", source)
         for marker in (

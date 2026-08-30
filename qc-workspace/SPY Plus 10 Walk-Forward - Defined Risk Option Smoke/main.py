@@ -40,7 +40,7 @@ class SPYPlus10WalkForwardDefinedRiskOptionSmoke(QCAlgorithm):
         self.set_end_date(2015, 3, 31)
         self.set_cash(1_000_000)
         self.set_time_zone(TimeZones.NEW_YORK)
-        self.set_brokerage_model(BrokerageName.QUANTCONNECT_BROKERAGE)
+        self.set_brokerage_model(BrokerageName.QUANT_CONNECT_BROKERAGE)
         self.settings.minimum_order_margin_portfolio_percentage = 0
         self.set_security_initializer(self._initialize_security)
 
