@@ -1,0 +1,13 @@
+{
+  "contract_expiry_buffer_days": 7,
+  "covariance_lookback_days": 252,
+  "formal_evaluation": false,
+  "gross_notional_cap": 0.70,
+  "live_trading": false,
+  "rebalance": "weekly-last-complete-trading-day-next-bar",
+  "roots": ["ES", "NQ", "ZN", "ZB", "GC", "SI", "CL", "NG", "ZC", "ZS", "6E", "6J", "6B"],
+  "signal_lookbacks_days": [63, 126, 252],
+  "signal_price_normalization": "BACKWARDS_RATIO",
+  "target_annual_volatility": 0.07,
+  "volatility_lookback_days": 60
+}
