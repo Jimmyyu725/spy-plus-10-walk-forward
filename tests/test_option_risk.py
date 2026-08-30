@@ -91,6 +91,20 @@ class OptionRiskTests(unittest.TestCase):
         self.assertLess(stress.credit_per_share, base.credit_per_share)
         self.assertLessEqual(stress.contracts, base.contracts)
 
+    def test_regulatory_reserve_is_inside_defined_maximum_loss(self):
+        base = size_defined_risk_spread(
+            spread(), equity=100_000, as_of=ENTRY,
+            realized_losses=[], per_contract_annual_pnl_volatility=500,
+        )
+        reserved = size_defined_risk_spread(
+            spread(), equity=100_000, as_of=ENTRY,
+            realized_losses=[], per_contract_annual_pnl_volatility=500,
+            regulatory_fee_per_contract=3,
+        )
+        self.assertEqual(reserved.contracts, 1)
+        self.assertAlmostEqual(reserved.entry_fees, base.entry_fees + 3)
+        self.assertAlmostEqual(reserved.total_max_loss, base.total_max_loss + 3)
+
 
 if __name__ == "__main__":
     unittest.main()
