@@ -96,6 +96,8 @@ class SPYPlus10WalkForwardDefinedRiskOptionSmoke(QCAlgorithm):
             "OPTION_REJECT_LIQUIDITY": 0,
             "OPTION_REJECT_RISK": 0,
             "OPTION_COMBO_REJECTED": 0,
+            "OPTION_COMBO_STALE_CANCELED": 0,
+            "OPTION_COMBO_INVALID": 0,
             "OPTION_ASSIGNMENT_EVENTS": 0,
         }
         self._license_status = "UNVERIFIED"
@@ -291,6 +293,10 @@ class SPYPlus10WalkForwardDefinedRiskOptionSmoke(QCAlgorithm):
             if filled and len(filled) != len(tickets):
                 self._statistics["OPTION_NAKED_LEG_COUNT"] += 1
             self._statistics["OPTION_COMBO_REJECTED"] += 1
+            if any(status == OrderStatus.INVALID for status in statuses):
+                self._statistics["OPTION_COMBO_INVALID"] += 1
+            else:
+                self._statistics["OPTION_COMBO_STALE_CANCELED"] += 1
             self._pending_combo = None
             return
         if not all(status == OrderStatus.FILLED for status in statuses):
@@ -431,14 +437,15 @@ class SPYPlus10WalkForwardDefinedRiskOptionSmoke(QCAlgorithm):
             for item in self._realized_losses
             if self.time.date() - timedelta(days=365) <= item.realized_at <= self.time.date()
         )
-        statistics = dict(self._statistics)
-        statistics.update(
-            {
-                "OPTION_LICENSE_STATUS": self._license_status,
-                "OPTION_COST_MODEL_STATUS": "PER_LEG_ADVERSE_LIMITS_AND_FEES",
-                "OPTION_TRAILING_REALIZED_LOSS": f"{trailing_loss:.2f}",
-                "OPTION_OPEN_POSITION_AT_END": str(self._position is not None).lower(),
-            }
-        )
-        for key, value in statistics.items():
+        for key, value in self._statistics.items():
             self.set_summary_statistic(key, str(value))
+        self.set_summary_statistic("OPTION_LICENSE_STATUS", self._license_status)
+        self.set_summary_statistic(
+            "OPTION_COST_MODEL_STATUS", "PER_LEG_ADVERSE_LIMITS_AND_FEES"
+        )
+        self.set_summary_statistic(
+            "OPTION_TRAILING_REALIZED_LOSS", f"{trailing_loss:.2f}"
+        )
+        self.set_summary_statistic(
+            "OPTION_OPEN_POSITION_AT_END", str(self._position is not None).lower()
+        )

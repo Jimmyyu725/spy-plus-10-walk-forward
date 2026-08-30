@@ -44,9 +44,13 @@ class OptionSmokeSyncTests(unittest.TestCase):
             '"OPTION_NAKED_LEG_COUNT"',
             '"OPTION_MAX_LOSS_BREACH_COUNT"',
             '"OPTION_FUTURE_INPUT_COUNT"',
+            '"OPTION_COMBO_STALE_CANCELED"',
+            '"OPTION_COMBO_INVALID"',
             '"OPTION_LICENSE_STATUS"',
         ):
             self.assertIn(marker, source)
+
+        self.assertNotIn("statistics.update(", source)
 
 
 if __name__ == "__main__":
