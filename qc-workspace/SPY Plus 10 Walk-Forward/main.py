@@ -4,7 +4,7 @@ from decimal import Decimal as PythonDecimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from audit import AuditTrail
+from audit import AuditError, AuditEvent, AuditTrail
 from baseline import load_baseline_contract
 from benchmark import PricePoint, build_spy_buy_hold
 from cloud_adapters.equity_sleeve import EquityFactorSleeve
@@ -18,8 +18,14 @@ from cloud_adapters.reality_models import (
 )
 from costs import equity_execution
 from execution import REGULATORY_POLICY_STATUS
+from formal_evidence import (
+    EVIDENCE_SCHEMA_VERSION,
+    build_object_store_key,
+    encode_evidence,
+    formal_overall_status,
+)
 from ledger import CashLedger
-from metrics import EquityPoint, evaluate_annual_gates
+from metrics import EquityPoint, MetricsError, evaluate_annual_gates
 from risk import (
     DatedReturn,
     PortfolioRiskError,
@@ -31,7 +37,7 @@ from risk import (
 
 
 class SpyPlusTenWalkForward(QCAlgorithm):
-    """Non-formal shared-account integration smoke; no live trading path."""
+    """Frozen historical evaluation; there is no live trading path."""
 
     def initialize(self):
         project = Path(__file__).resolve().parent
@@ -43,20 +49,29 @@ class SpyPlusTenWalkForward(QCAlgorithm):
             project / "portfolio-integration-contract.json",
             allow_embedded=True,
         )
-        if baseline.formal_evaluation or baseline.live_trading:
-            raise RuntimeError("baseline must remain non-formal and non-live")
-        if integration["formal_evaluation"] or integration["live_trading"]:
-            raise RuntimeError("integration smoke must remain non-formal and non-live")
-        mode = self.get_parameter("evaluation_mode") or "integration-smoke"
-        if mode != "integration-smoke":
-            raise RuntimeError("only the non-formal integration smoke is enabled")
+        if not baseline.formal_evaluation or baseline.live_trading:
+            raise RuntimeError("baseline must remain formal and non-live")
+        if not integration["formal_evaluation"] or integration["live_trading"]:
+            raise RuntimeError("integration contract must remain formal and non-live")
+        mode = self.get_parameter("evaluation_mode")
+        if mode != "frozen-evaluation":
+            raise RuntimeError("only the frozen formal evaluation is enabled")
         raw_slippage = self.get_parameter("slippage_multiplier")
-        self._slippage_multiplier = float(raw_slippage) if raw_slippage else 1.0
+        if not raw_slippage:
+            raise RuntimeError("slippage multiplier is required")
+        self._slippage_multiplier = float(raw_slippage)
         if self._slippage_multiplier not in {1.0, 2.0}:
             raise RuntimeError("slippage multiplier must be frozen to 1 or 2")
+        run_label = self.get_parameter("evaluation_run_label")
+        if run_label not in {"base", "double"}:
+            raise RuntimeError("evaluation run label must be base or double")
+        expected_label = "base" if self._slippage_multiplier == 1.0 else "double"
+        if run_label != expected_label:
+            raise RuntimeError("run label must match the slippage multiplier")
+        self._evaluation_run_label = run_label
 
         self.set_start_date(2012, 1, 1)
-        self.set_end_date(2015, 3, 31)
+        self.set_end_date(2026, 8, 28)
         self.set_cash(1_000_000)
         self.set_time_zone(TimeZones.NEW_YORK)
         self.set_brokerage_model(BrokerageName.QUANT_CONNECT_BROKERAGE)
@@ -69,7 +84,7 @@ class SpyPlusTenWalkForward(QCAlgorithm):
         ).symbol
         self.set_benchmark(self._spy)
 
-        self._trading_start = date(2013, 1, 2)
+        self._trading_start = date(2015, 1, 2)
         self._initial_cash = PythonDecimal("1000000")
         self._equity = EquityFactorSleeve(self, self._spy)
         self._futures = FuturesTrendSleeve(self)
@@ -96,6 +111,8 @@ class SpyPlusTenWalkForward(QCAlgorithm):
         self._max_beta = float("-inf")
         self._max_drawdown = 0.0
         self._max_margin_used_fraction = 0.0
+        self._cumulative_fees = 0.0
+        self._daily_evidence = []
 
         self.schedule.on(
             self.date_rules.every_day(self._spy),
@@ -326,9 +343,53 @@ class SpyPlusTenWalkForward(QCAlgorithm):
         self._max_total_gross = max(self._max_total_gross, actual_gross)
         if actual_gross > 2.0 + 1e-6:
             self._gate_failures.add("ACTUAL_TOTAL_GROSS_BREACH")
+        positions = []
+        for security in self.securities.values():
+            holding = self.portfolio[security.symbol]
+            if holding.quantity == 0:
+                continue
+            positions.append(
+                {
+                    "symbol": str(security.symbol),
+                    "security_type": str(security.type),
+                    "quantity": f"{float(holding.quantity):.12f}",
+                    "price": f"{float(security.price):.12f}",
+                    "holdings_value": f"{float(holding.holdings_value):.12f}",
+                }
+            )
+        self._peak_equity = max(self._peak_equity, equity)
+        current_drawdown = max(0.0, 1 - equity / self._peak_equity)
+        self._max_drawdown = max(self._max_drawdown, current_drawdown)
+        self._daily_evidence.append(
+            {
+                "date": day.isoformat(),
+                "strategy_equity": f"{equity:.12f}",
+                "spy_equity": str(benchmark_value),
+                "cumulative_fees": f"{self._cumulative_fees:.12f}",
+                "margin_used": f"{margin_used:.12f}",
+                "margin_remaining": f"{float(self.portfolio.margin_remaining):.12f}",
+                "margin_used_fraction": f"{margin_fraction:.12f}",
+                "actual_total_gross": f"{actual_gross:.12f}",
+                "drawdown": f"{current_drawdown:.12f}",
+                "predicted_beta": (
+                    f"{self._risk_allocation.predicted_beta:.12f}"
+                    if self._risk_allocation is not None
+                    else None
+                ),
+                "maximum_alpha_risk_contribution": (
+                    f"{self._risk_allocation.maximum_risk_contribution:.12f}"
+                    if self._risk_allocation is not None
+                    else None
+                ),
+                "positions": positions,
+            }
+        )
 
     def on_order_event(self, order_event):
+        self._futures.on_order_event(order_event)
         self._option.on_order_event(order_event)
+        if order_event.status in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
+            self._cumulative_fees += float(order_event.order_fee.value.amount)
         if order_event.status == OrderStatus.INVALID:
             self._gate_failures.add("ORDER_INVALID")
         if (
@@ -381,27 +442,140 @@ class SpyPlusTenWalkForward(QCAlgorithm):
         for sleeve in (self._equity, self._futures, self._option):
             statistics.update(sleeve.statistics())
         self._validate_sleeve_statistics(statistics)
+        annual = None
         if not self._strategy_points or not self._benchmark_points:
             self._gate_failures.add("DAILY_EVIDENCE_MISSING")
         else:
-            annual = evaluate_annual_gates(
-                self._strategy_points,
-                self._benchmark_points,
-                initial_value=self._initial_cash,
-                as_of=self._strategy_points[-1].as_of,
-            )
-            for row in annual.rows:
-                statistics[f"INTEGRATION_YEAR_{row.year}"] = (
-                    f"{row.period},strategy={row.strategy_return},"
-                    f"spy={row.spy_return},excess={row.excess_return},"
-                    f"status={row.status}"
+            try:
+                annual = evaluate_annual_gates(
+                    self._strategy_points,
+                    self._benchmark_points,
+                    initial_value=self._initial_cash,
+                    as_of=self._strategy_points[-1].as_of,
                 )
+            except MetricsError as error:
+                self._gate_failures.add("ANNUAL_EVIDENCE_INVALID")
+                self.error(f"annual evidence failed closed: {error}")
+            if annual is not None:
+                for row in annual.rows:
+                    statistics[f"FORMAL_YEAR_{row.year}"] = (
+                        f"{row.period},strategy={row.strategy_return},"
+                        f"spy={row.spy_return},excess={row.excess_return},"
+                        f"status={row.status}"
+                    )
+        raw_audits = list(self._futures.audit_samples()) + list(
+            self._option.audit_samples()
+        )
+        raw_audits.sort(key=lambda sample: sample["fill_time"])
+        trail = AuditTrail()
+        for sequence, sample in enumerate(raw_audits, start=1):
+            identity = {
+                key: value
+                for key, value in sample.items()
+                if key not in {
+                    "module",
+                    "data_cutoff",
+                    "signal_time",
+                    "order_time",
+                    "fill_time",
+                }
+            }
+            try:
+                trail.append(
+                    AuditEvent(
+                        sequence,
+                        sample["module"],
+                        sample["data_cutoff"],
+                        sample["signal_time"],
+                        sample["order_time"],
+                        sample["fill_time"],
+                        identity,
+                        {},
+                        {"order_id": identity.get("order_id")},
+                        {"slippage_multiplier": self._slippage_multiplier},
+                    )
+                )
+            except AuditError:
+                self._gate_failures.add("AUDIT_CAUSALITY")
+                break
+        audit_samples = list(trail.events)
+        if len(audit_samples) < 10:
+            self._gate_failures.add("AUDIT_SAMPLE_COUNT")
+        if (
+            not self._daily_evidence
+            or self._daily_evidence[0]["date"] != "2015-01-02"
+            or self._daily_evidence[-1]["date"] != "2026-08-28"
+        ):
+            self._gate_failures.add("FORMAL_DATE_COVERAGE")
+
+        data_failures = {
+            failure
+            for failure in self._gate_failures
+            if failure in {
+                "AUDIT_SAMPLE_COUNT",
+                "AUDIT_CAUSALITY",
+                "ANNUAL_EVIDENCE_INVALID",
+                "BENCHMARK_DATE_MISMATCH",
+                "BENCHMARK_TOTAL_RETURN_MISSING",
+                "DAILY_EVIDENCE_MISSING",
+                "EQUITY_FUTURE_INPUT_COUNT",
+                "EQUITY_LICENSE_UNAVAILABLE",
+                "FORMAL_DATE_COVERAGE",
+                "OPTION_FUTURE_INPUT_COUNT",
+                "OPTION_LICENSE_UNAVAILABLE",
+                "PORTFOLIO_RISK_EVIDENCE",
+            }
+            or failure.startswith("ROOT_")
+        }
+        safety_failures = self._gate_failures - data_failures
+        annual_status = annual.overall_status if annual is not None else "UNVERIFIED"
+        evidence_key = build_object_store_key(
+            self.project_id,
+            self._evaluation_run_label,
+            self.algorithm_id,
+        )
+        payload = {
+            "schema_version": EVIDENCE_SCHEMA_VERSION,
+            "run": {
+                "project_id": self.project_id,
+                "algorithm_id": str(self.algorithm_id),
+                "run_label": self._evaluation_run_label,
+                "slippage_multiplier": self._slippage_multiplier,
+                "evaluation_mode": "frozen-evaluation",
+                "start_date": "2012-01-01",
+                "trading_start_date": "2015-01-02",
+                "end_date": "2026-08-28",
+                "timezone": "America/New_York",
+            },
+            "daily": self._daily_evidence,
+            "audit_samples": audit_samples,
+            "gate_failures": sorted(self._gate_failures),
+            "licenses": {
+                "equity": statistics.get("EQUITY_LICENSE_STATUS", "UNVERIFIED"),
+                "option": statistics.get("OPTION_LICENSE_STATUS", "UNVERIFIED"),
+            },
+        }
+        evidence_saved = False
+        try:
+            evidence_saved = bool(
+                self.object_store.save_bytes(evidence_key, encode_evidence(payload))
+            )
+        except Exception as error:
+            self.error(f"formal evidence save failed: {error}")
+        if not evidence_saved:
+            data_failures.add("OBJECT_STORE_SAVE_FAILED")
+            self._gate_failures.add("OBJECT_STORE_SAVE_FAILED")
+        data_status = "PASS" if not data_failures else "UNVERIFIED"
+        safety_status = "PASS" if not safety_failures else "FAIL"
+        overall_status = formal_overall_status(
+            data_status,
+            safety_status,
+            annual_status,
+        )
         statistics.update(
             {
-                "PORTFOLIO_FORMAL_EVALUATION": "false",
-                "PORTFOLIO_GATE_STATUS": (
-                    "PASS" if not self._gate_failures else "FAIL"
-                ),
+                "PORTFOLIO_FORMAL_EVALUATION": "true",
+                "PORTFOLIO_GATE_STATUS": safety_status,
                 "PORTFOLIO_GATE_FAILURES": (
                     ",".join(sorted(self._gate_failures)) or "NONE"
                 ),
@@ -431,6 +605,19 @@ class SpyPlusTenWalkForward(QCAlgorithm):
                 "PORTFOLIO_DAILY_EVIDENCE_COUNT": len(self._strategy_points),
                 "PORTFOLIO_REGULATORY_FEE_STATUS": REGULATORY_POLICY_STATUS,
                 "PORTFOLIO_SLIPPAGE_MULTIPLIER": self._slippage_multiplier,
+                "FORMAL_EVIDENCE_KEY": evidence_key,
+                "FORMAL_EVIDENCE_SAVE_STATUS": (
+                    "PASS" if evidence_saved else "UNVERIFIED"
+                ),
+                "FORMAL_EVIDENCE_BYTE_COUNT": (
+                    len(encode_evidence(payload)) if evidence_saved else 0
+                ),
+                "FORMAL_AUDIT_SAMPLE_COUNT": len(audit_samples),
+                "FORMAL_DATA_AUDIT_STATUS": data_status,
+                "FORMAL_SAFETY_GATE_STATUS": safety_status,
+                "FORMAL_ANNUAL_GATE_STATUS": annual_status,
+                "FORMAL_OVERALL_STATUS": overall_status,
+                "FORMAL_RUN_LABEL": self._evaluation_run_label,
             }
         )
         for key, value in statistics.items():

@@ -80,8 +80,8 @@ class FoundationValidationTests(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         status = validate_foundation(repository_root)
         self.assertEqual(status.project_name, "SPY Plus 10 Walk-Forward")
-        self.assertEqual(status.mode, "portfolio-integration-smoke")
-        self.assertFalse(status.formal_evaluation)
+        self.assertEqual(status.mode, "frozen-evaluation")
+        self.assertTrue(status.formal_evaluation)
 
 
 if __name__ == "__main__":

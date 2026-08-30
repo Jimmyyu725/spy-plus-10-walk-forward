@@ -23,7 +23,7 @@ class CloudSleeveAdapterTests(unittest.TestCase):
         self.assertEqual(contract["max_alpha_risk_contribution"], 0.4)
         self.assertEqual(contract["alpha_gross_cap"], 1.0)
         self.assertEqual(contract["total_gross_cap"], 2.0)
-        self.assertFalse(contract["formal_evaluation"])
+        self.assertTrue(contract["formal_evaluation"])
         self.assertFalse(contract["live_trading"])
 
     def test_adapters_are_services_not_algorithms(self):
@@ -59,6 +59,17 @@ class CloudSleeveAdapterTests(unittest.TestCase):
         self.assertIn("def _reduce_current_contracts(self, weights):", source)
         self.assertNotIn("self._chains[root] = chain", source)
 
+    def test_futures_executes_a_weekly_signal_only_on_a_later_slice(self):
+        source = (ADAPTERS / "futures_sleeve.py").read_text(encoding="utf-8")
+        on_data = source[source.index("    def on_data("):source.index("    def _capture_chains(")]
+        self.assertLess(
+            on_data.index("self._execute_pending_if_due()"),
+            on_data.index("self._compute_weekly_targets()"),
+        )
+        self.assertEqual(on_data.count("self._execute_pending_if_due()"), 1)
+        self.assertIn("def on_order_event(self, order_event):", source)
+        self.assertIn("def audit_samples(self):", source)
+
     def test_option_retains_atomic_defined_risk_and_scale(self):
         source = (ADAPTERS / "option_sleeve.py").read_text(encoding="utf-8")
         self.assertIn("def set_scale(self, scale):", source)
@@ -74,6 +85,11 @@ class CloudSleeveAdapterTests(unittest.TestCase):
         self.assertIn("long_limit = max(", source)
         self.assertIn("self._last_exit_attempt_date", source)
         self.assertNotIn("self.market_order(", source)
+        self.assertIn("def audit_samples(self):", source)
+        self.assertIn('"data_cutoff":', source)
+        self.assertIn('"signal_time":', source)
+        self.assertIn('"order_time":', source)
+        self.assertIn('"fill_time":', source)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ class BaselineContractTests(unittest.TestCase):
         self.assertEqual(contract.initial_cash, "1000000")
         self.assertEqual(contract.annual_hurdle_percentage_points, "0.10")
         self.assertEqual(contract.evaluation_start, "2015-01-01")
-        self.assertFalse(contract.formal_evaluation)
+        self.assertTrue(contract.formal_evaluation)
         self.assertFalse(contract.live_trading)
 
     def test_contract_rejects_live_trading(self):
@@ -43,13 +43,23 @@ class BaselineContractTests(unittest.TestCase):
             missing = Path(directory) / "not-deployed.json"
             contract = load_baseline_contract(missing, allow_embedded=True)
         self.assertEqual(contract.initial_cash, "1000000")
-        self.assertFalse(contract.formal_evaluation)
+        self.assertTrue(contract.formal_evaluation)
         self.assertFalse(contract.live_trading)
+
+    def test_repository_contract_freezes_evaluation_boundary_and_verdict_rule(self):
+        source = json.loads(
+            (PROJECT_DIR / "baseline-contract.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(source["evaluation_start"], "2015-01-01")
+        self.assertEqual(source["evaluation_end"], "2026-08-28")
+        self.assertEqual(source["objective_run_label"], "base")
+        self.assertTrue(source["stress_required"])
+        self.assertFalse(source["stress_annual_required_for_pass"])
 
     def test_cloud_main_imports_every_baseline_module(self):
         source = (PROJECT_DIR / "main.py").read_text(encoding="utf-8")
         for marker in (
-            "from audit import AuditTrail",
+            "from audit import AuditError, AuditEvent, AuditTrail",
             "from baseline import load_baseline_contract",
             "from benchmark import PricePoint",
             "from costs import equity_execution",

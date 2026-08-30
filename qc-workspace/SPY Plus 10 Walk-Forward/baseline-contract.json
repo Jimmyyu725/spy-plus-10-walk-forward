@@ -18,11 +18,15 @@
     }
   },
   "current_year_label": "PARTIAL_YEAR",
+  "evaluation_end": "2026-08-28",
   "evaluation_start": "2015-01-01",
-  "formal_evaluation": false,
+  "formal_evaluation": true,
   "initial_cash": "1000000",
   "live_trading": false,
+  "objective_run_label": "base",
   "project_name": "SPY Plus 10 Walk-Forward",
   "schema_version": 1,
+  "stress_annual_required_for_pass": false,
+  "stress_required": true,
   "taxes_included": false
 }

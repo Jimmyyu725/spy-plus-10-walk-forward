@@ -1,6 +1,7 @@
 from AlgorithmImports import *
 from datetime import timedelta
 from math import ceil, floor, isfinite
+from zoneinfo import ZoneInfo
 
 from execution import (
     OPTION_TAF_PER_CONTRACT,
@@ -82,6 +83,7 @@ class DefinedRiskOptionSleeve:
         self._last_exit_attempt_date = None
         self._last_invalid_response = "NONE"
         self._realized_losses = []
+        self._audit_samples = []
         self._statistics = {
             "OPTION_CHAIN_OBSERVATIONS": 0,
             "OPTION_ELIGIBLE_SIGNALS": 0,
@@ -103,6 +105,12 @@ class DefinedRiskOptionSleeve:
 
     def __getattr__(self, name):
         return getattr(self._algorithm, name)
+
+    @staticmethod
+    def _aware(value):
+        return value if value.tzinfo is not None else value.replace(
+            tzinfo=ZoneInfo("America/New_York")
+        )
 
     @property
     def data_cutoff(self):
@@ -339,6 +347,8 @@ class DefinedRiskOptionSleeve:
             "sizing": sizing,
             "scale": self._scale,
             "submitted": self.time,
+            "data_cutoff": data_cutoff_time,
+            "signal_time": signal.signal_time,
         }
         self._pending_signal = None
         self._reconcile_combo()
@@ -413,6 +423,23 @@ class DefinedRiskOptionSleeve:
             self._last_exit_attempt_date = None
             self._current_max_loss = sizing.total_max_loss
             self._statistics["OPTION_SPREADS_OPENED"] += 1
+            data_cutoff = self._aware(pending["data_cutoff"])
+            signal_time = self._aware(pending["signal_time"])
+            order_time = self._aware(pending["submitted"])
+            fill_time = self._aware(self.time)
+            if data_cutoff < signal_time < order_time < fill_time:
+                self._audit_samples.append(
+                    {
+                        "module": "OPTION",
+                        "data_cutoff": data_cutoff,
+                        "signal_time": signal_time,
+                        "order_time": order_time,
+                        "fill_time": fill_time,
+                        "short_symbol": selection.short_put.symbol,
+                        "long_symbol": selection.long_put.symbol,
+                        "contracts": sizing.contracts,
+                    }
+                )
         else:
             position = self._position
             decision = pending["decision"]
@@ -441,6 +468,9 @@ class DefinedRiskOptionSleeve:
 
     def on_assignment_order_event(self, assignment_event):
         self._statistics["OPTION_ASSIGNMENT_EVENTS"] += 1
+
+    def audit_samples(self):
+        return tuple(dict(sample) for sample in self._audit_samples)
 
     @staticmethod
     def _round_up(value, tick):

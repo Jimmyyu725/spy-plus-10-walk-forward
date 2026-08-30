@@ -16,7 +16,7 @@ EXPECTED_INTEGRATION_CONTRACT = {
     "conservative_regulatory_fee_policy": "max-observed-2015-2026",
     "drawdown_alpha_half": 0.15,
     "drawdown_alpha_zero": 0.25,
-    "formal_evaluation": False,
+    "formal_evaluation": True,
     "live_trading": False,
     "max_alpha_risk_contribution": 0.4,
     "module_target_volatility": {

@@ -82,6 +82,18 @@ def validate_foundation(root: Path) -> FoundationStatus:
             "start_date": "2012-01-01",
             "trading_start_date": "2013-01-02",
         },
+        "frozen-evaluation": {
+            "benchmark": "SPY",
+            "end_date": "2026-08-28",
+            "formal_evaluation": True,
+            "initial_cash": 1_000_000,
+            "language": "Python",
+            "live_trading": False,
+            "mode": "frozen-evaluation",
+            "name": PROJECT_NAME,
+            "start_date": "2012-01-01",
+            "trading_start_date": "2015-01-02",
+        },
     }
     expected_manifest = expected_manifests.get(manifest.get("mode"))
     if expected_manifest is None:
@@ -109,6 +121,17 @@ def validate_foundation(root: Path) -> FoundationStatus:
             "self.set_benchmark(self._spy)",
             "BrokerageName.QUANT_CONNECT_BROKERAGE",
             'mode != "integration-smoke"',
+        ),
+        "frozen-evaluation": (
+            "class SpyPlusTenWalkForward(QCAlgorithm)",
+            "self.set_start_date(2012, 1, 1)",
+            "self.set_end_date(2026, 8, 28)",
+            "self.set_cash(1_000_000)",
+            "self.set_benchmark(self._spy)",
+            "BrokerageName.QUANT_CONNECT_BROKERAGE",
+            'mode != "frozen-evaluation"',
+            'run_label not in {"base", "double"}',
+            "self._trading_start = date(2015, 1, 2)",
         ),
     }
     required_markers = required_markers_by_mode[manifest["mode"]]
