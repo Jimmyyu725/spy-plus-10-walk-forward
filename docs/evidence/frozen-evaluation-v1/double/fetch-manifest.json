@@ -1,0 +1,38 @@
+{
+  "api_endpoints": [
+    "backtests/read",
+    "backtests/orders/read",
+    "backtests/trades/read"
+  ],
+  "backtest_id": "2f5c039144959e6ccfb0ef2dbdf27e82",
+  "fetched_at_utc": "2026-08-30T21:35:48.900561+00:00",
+  "files": {
+    "available-statistics-check.json": {
+      "bytes": 6422,
+      "sha256_base64": "mn8+6uyD1+dlmwuMNz2LYqYctTfeqxr06I+yFXa/uSo="
+    },
+    "backtest-summary.json": {
+      "bytes": 6725,
+      "sha256_base64": "mcRXVBSuMYQihh9Ydk3ivBZrlAzA4KKNDrF5Bl936jw="
+    },
+    "backtest.json.gz": {
+      "bytes": 983674,
+      "sha256_base64": "qDrPuDOfKyX4OgIUxvl46dugOqDg/etd3IjmXeHFR5g="
+    },
+    "orders.jsonl.gz": {
+      "bytes": 1293487,
+      "sha256_base64": "1dMGoynhq/pEi/BhxeH/2WbAzp5MMClScYo3e1R9aio="
+    },
+    "trades.jsonl.gz": {
+      "bytes": 1818026,
+      "sha256_base64": "pU1cYPhAlE3mo4zu7cJUInq1ZZoSRQ72GM7SEmhDWGI="
+    }
+  },
+  "object_store_evidence_byte_count": "0",
+  "object_store_evidence_key": "35858890/frozen-evaluation-v1/double-2f5c039144959e6ccfb0ef2dbdf27e82.json.gz",
+  "object_store_evidence_status": "UNVERIFIED",
+  "order_rows": 13497,
+  "project_id": 35858890,
+  "schema_version": "frozen-evaluation-api-archive-v1",
+  "trade_rows": 11650
+}

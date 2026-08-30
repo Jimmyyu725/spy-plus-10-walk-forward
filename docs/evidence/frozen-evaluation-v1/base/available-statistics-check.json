@@ -1,0 +1,175 @@
+{
+  "annual_rows": [
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.03155410553007",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.03155410553007",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.091983866525",
+      "spy_total_return": "-0.008016133475",
+      "strategy_return": "0.02353797205507",
+      "year": 2015
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.010851582723426559249530812",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.010851582723426559249530812",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.196320719745891131392057495",
+      "spy_total_return": "0.096320719745891131392057495",
+      "strategy_return": "0.107172302469317690641588307",
+      "year": 2016
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "-0.004403011185851436524762202",
+      "recomputed_status": "FAIL",
+      "reported_excess": "-0.004403011185851436524762202",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.293833707487898851903197438",
+      "spy_total_return": "0.193833707487898851903197438",
+      "strategy_return": "0.189430696302047415378435236",
+      "year": 2017
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.0084888391918108697939918403",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.0084888391918108697939918403",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.0365239077350211372435957735",
+      "spy_total_return": "-0.0634760922649788627564042265",
+      "strategy_return": "-0.0549872530731679929624123862",
+      "year": 2018
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.022440690684472566944269991",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.022440690684472566944269991",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.387838141334218518731283904",
+      "spy_total_return": "0.287838141334218518731283904",
+      "strategy_return": "0.310278832018691085675553895",
+      "year": 2019
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.023162005147502355193797390",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.023162005147502355193797390",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.261616974618545250604163715",
+      "spy_total_return": "0.161616974618545250604163715",
+      "strategy_return": "0.184778979766047605797961105",
+      "year": 2020
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "-0.000547064849172511289941514",
+      "recomputed_status": "FAIL",
+      "reported_excess": "-0.000547064849172511289941514",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.370345352745334621679904475",
+      "spy_total_return": "0.270345352745334621679904475",
+      "strategy_return": "0.269798287896162110389962961",
+      "year": 2021
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.0116889346007046918751560854",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.0116889346007046918751560854",
+      "reported_status": "FAIL",
+      "required_strategy_return": "-0.0948114299607913899325567744",
+      "spy_total_return": "-0.1948114299607913899325567744",
+      "strategy_return": "-0.1831224953600866980574006890",
+      "year": 2022
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.012629014446146351042459847",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.012629014446146351042459847",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.342860272210534027944833676",
+      "spy_total_return": "0.242860272210534027944833676",
+      "strategy_return": "0.255489286656680378987293523",
+      "year": 2023
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.029286146826317089678830170",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.029286146826317089678830170",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.333041957892430582891591306",
+      "spy_total_return": "0.233041957892430582891591306",
+      "strategy_return": "0.262328104718747672570421476",
+      "year": 2024
+    },
+    {
+      "period": "FULL_YEAR",
+      "recomputed_excess": "0.000379881485510949178761853",
+      "recomputed_status": "FAIL",
+      "reported_excess": "0.000379881485510949178761853",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.263523778869083139344326507",
+      "spy_total_return": "0.163523778869083139344326507",
+      "strategy_return": "0.163903660354594088523088360",
+      "year": 2025
+    },
+    {
+      "period": "PARTIAL_YEAR",
+      "recomputed_excess": "-0.004009643629422043190838131",
+      "recomputed_status": "FAIL",
+      "reported_excess": "-0.004009643629422043190838131",
+      "reported_status": "FAIL",
+      "required_strategy_return": "0.228209239668190935652680226",
+      "spy_total_return": "0.128209239668190935652680226",
+      "strategy_return": "0.124199596038768892461842095",
+      "year": 2026
+    }
+  ],
+  "annual_statistics_recheck_status": "FAIL",
+  "backtest_id": "0ac19b9710e4c8e985cc475bc7f21788",
+  "cloud_reported_annual_status": "FAIL",
+  "cloud_reported_audit_sample_count": 466,
+  "cloud_reported_total_orders": 13546,
+  "daily_evidence_available": false,
+  "errors": [
+    "DAILY_EVIDENCE_OBJECT_MISSING",
+    "MAX_DRAWDOWN_NOT_INDEPENDENTLY_RECOMPUTABLE",
+    "STRICT_CAUSALITY_SAMPLES_NOT_INSPECTABLE"
+  ],
+  "fill_before_order_count": 0,
+  "independent_formal_status": "UNVERIFIED",
+  "independent_max_drawdown_available": false,
+  "invalid_order_count": 0,
+  "order_count_matches": true,
+  "order_event_statuses": {
+    "cancelPending": 45,
+    "canceled": 45,
+    "filled": 13501,
+    "submitted": 13533
+  },
+  "order_rows": 13546,
+  "order_security_type_codes": {
+    "1": 12644,
+    "2": 200,
+    "5": 702
+  },
+  "order_status_codes": {
+    "3": 13501,
+    "5": 45
+  },
+  "project_id": 35858890,
+  "run_label": "base",
+  "schema_version": "available-cloud-statistics-recheck-v1",
+  "scope": "Independent parsing and arithmetic recheck of archived QuantConnect structured statistics and API order/trade rows; not an equity-curve recomputation.",
+  "strict_causality_samples_available": false,
+  "trade_rows": 11683,
+  "trade_time_violation_count": 0
+}
