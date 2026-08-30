@@ -66,6 +66,9 @@ class EquityFactorSleeve:
         allocation = self._pending or self._current_allocation
         return allocation.beta_after_hedge if allocation is not None else 0.0
 
+    def applied_scale(self):
+        return self._last_scale
+
     def spy_hedge_weight(self):
         if self._current_allocation is None:
             return 0.0
@@ -198,7 +201,9 @@ class EquityFactorSleeve:
         allocation = self._pending or self._current_allocation
         if allocation is None or not self._algorithm.can_trade_now():
             return
-        if self._pending is None and abs(scale - self._last_scale) < 1e-12:
+        # Between monthly signals, immediately reduce risk but never add churn by
+        # chasing a higher daily allowance.  A new monthly signal resets the scale.
+        if self._pending is None and scale >= self._last_scale - 1e-12:
             return
         desired = {
             self._qc_symbols[symbol]: weight * scale

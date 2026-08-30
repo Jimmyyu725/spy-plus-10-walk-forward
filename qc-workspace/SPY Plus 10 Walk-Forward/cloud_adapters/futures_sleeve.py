@@ -47,18 +47,22 @@ class FuturesTrendSleeve:
         self._futures = {}
         self._prices = {root: deque(maxlen=253) for root in ROOT_CONSTANTS}
         self._returns = {root: deque(maxlen=252) for root in ROOT_CONSTANTS}
-        self._chains = {}
+        self._contract_snapshots = {}
+        self._contract_symbols = {}
+        self._contract_snapshot_dates = {}
         self._pending = None
         self._last_weights = None
         self._last_signal_date = None
         self._current_contract = {}
         self._last_observed_week = None
-        self._scale = 0.0
+        self._allowed_scale = 0.0
+        self._applied_scale = 0.0
         self._proposed_gross = 0.70
         self._estimated_beta = 0.0
         self._signal_count = 0
         self._order_count = 0
         self._continuous_order_count = 0
+        self._scale_violation_count = 0
         self._coverage = {
             root: {
                 "history": False,
@@ -93,13 +97,20 @@ class FuturesTrendSleeve:
     def estimated_beta(self):
         return self._estimated_beta
 
+    def applied_scale(self):
+        return self._applied_scale
+
     def set_scale(self, scale):
         if not 0 <= scale <= 1:
             raise ValueError("futures scale must be between zero and one")
-        changed = abs(scale - self._scale) >= 1e-12
-        self._scale = scale
-        if changed and self._last_weights is not None and self._algorithm.can_trade_now():
-            self._execute_weights(self._last_weights)
+        self._allowed_scale = scale
+        if (
+            scale < self._applied_scale - 1e-12
+            and self._last_weights is not None
+            and self._algorithm.can_trade_now()
+        ):
+            if not self._execute_weights(self._last_weights):
+                self._scale_violation_count += 1
 
     def on_data(self, data: Slice):
         self._capture_chains(data)
@@ -116,8 +127,24 @@ class FuturesTrendSleeve:
     def _capture_chains(self, data):
         for root, future in self._futures.items():
             chain = data.future_chains.get(future.symbol)
-            if chain:
-                self._chains[root] = chain
+            if not chain:
+                continue
+            snapshots = []
+            symbols = {}
+            for contract in chain.contracts.values():
+                snapshot = ContractSnapshot(
+                    str(contract.symbol),
+                    contract.expiry.date(),
+                    float(contract.last_price),
+                    int(contract.volume),
+                    int(contract.open_interest),
+                )
+                snapshots.append(snapshot)
+                symbols[snapshot.symbol] = contract.symbol
+            if snapshots:
+                self._contract_snapshots[root] = snapshots
+                self._contract_symbols[root] = symbols
+                self._contract_snapshot_dates[root] = self.time.date()
 
     def _capture_completed_prices(self, data):
         for root, future in self._futures.items():
@@ -176,22 +203,15 @@ class FuturesTrendSleeve:
             self._pending = None
 
     def _select_contracts(self):
-        if not all(root in self._chains for root in ROOT_CONSTANTS):
+        if not all(root in self._contract_snapshots for root in ROOT_CONSTANTS):
             return None
         selected = {}
-        for root, chain in self._chains.items():
-            snapshots = []
-            symbols = {}
-            for contract in chain.contracts.values():
-                snapshot = ContractSnapshot(
-                    str(contract.symbol),
-                    contract.expiry.date(),
-                    float(contract.last_price),
-                    int(contract.volume),
-                    int(contract.open_interest),
-                )
-                snapshots.append(snapshot)
-                symbols[snapshot.symbol] = contract.symbol
+        for root in ROOT_CONSTANTS:
+            age = (self.time.date() - self._contract_snapshot_dates[root]).days
+            if age > 7:
+                return None
+            snapshots = self._contract_snapshots[root]
+            symbols = self._contract_symbols[root]
             try:
                 choice = select_volume_contract(snapshots, self.time.date())
             except RollSelectionError:
@@ -212,7 +232,7 @@ class FuturesTrendSleeve:
             multiplier = float(
                 self.securities[symbol].symbol_properties.contract_multiplier
             )
-            target_notional = weights[root] * self._scale * float(
+            target_notional = weights[root] * self._allowed_scale * float(
                 self.portfolio.total_portfolio_value
             )
             target_quantity = int(target_notional / (snapshot.price * multiplier))
@@ -223,6 +243,7 @@ class FuturesTrendSleeve:
                 self._order_count += 1
                 self._coverage[root]["order"] = True
             self._current_contract[root] = symbol
+        self._applied_scale = self._allowed_scale
         return True
 
     def statistics(self):
@@ -230,6 +251,7 @@ class FuturesTrendSleeve:
             "TREND_SIGNAL_COUNT": self._signal_count,
             "TREND_ORDER_COUNT": self._order_count,
             "CONTINUOUS_ORDER_COUNT": self._continuous_order_count,
+            "TREND_SCALE_VIOLATION_COUNT": self._scale_violation_count,
             "TREND_PROPOSED_GROSS": f"{self._proposed_gross:.12f}",
             "TREND_ESTIMATED_BETA": f"{self._estimated_beta:.12f}",
         }

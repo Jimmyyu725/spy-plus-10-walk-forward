@@ -49,6 +49,9 @@ class PortfolioIntegrationCloudTests(unittest.TestCase):
             '"PORTFOLIO_MAX_MARGIN_USED_FRACTION"',
             '"PORTFOLIO_DAILY_EVIDENCE_COUNT"',
             '"PORTFOLIO_REGULATORY_FEE_STATUS"',
+            '"TREND_ORDER_COUNT"',
+            '"TREND_SCALE_VIOLATION_COUNT"',
+            'key.startswith("ROOT_")',
             "def on_margin_call(self, requests):",
             "def on_margin_call_warning(self):",
         ):
@@ -67,6 +70,7 @@ class PortfolioIntegrationCloudTests(unittest.TestCase):
             "FUTURE_REGULATORY_PER_CONTRACT",
             "class EquityAdverseSlippageModel:",
             "class FutureOneTickSlippageModel:",
+            "class OptionAdverseSlippageModel:",
             "multiplier not in {1.0, 2.0}",
         ):
             self.assertIn(marker, source)

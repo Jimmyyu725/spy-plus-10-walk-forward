@@ -78,6 +78,9 @@ class DefinedRiskOptionSleeve:
         self._pending_signal = None
         self._pending_combo = None
         self._position = None
+        self._position_scale = 0.0
+        self._last_exit_attempt_date = None
+        self._last_invalid_response = "NONE"
         self._realized_losses = []
         self._statistics = {
             "OPTION_CHAIN_OBSERVATIONS": 0,
@@ -114,8 +117,18 @@ class DefinedRiskOptionSleeve:
     def proposed_gross(self):
         equity = float(self.portfolio.total_portfolio_value)
         if equity > 0 and self._current_max_loss > 0:
-            return min(0.005, self._current_max_loss / equity)
+            applied = max(self._position_scale, 1e-12)
+            return min(0.005, self._current_max_loss / equity / applied)
         return 0.005
+
+    def applied_scale(self):
+        return self._position_scale if self._position is not None else self._scale
+
+    def actual_gross(self):
+        equity = float(self.portfolio.total_portfolio_value)
+        if self._position is None or equity <= 0:
+            return 0.0
+        return self._current_max_loss / equity
 
     def estimated_beta(self):
         if self._position is None or self._latest_chain is None:
@@ -132,18 +145,22 @@ class DefinedRiskOptionSleeve:
         net_delta = self._position.contracts * (
             -float(short_contract.greeks.delta) + float(long_contract.greeks.delta)
         )
-        return (
+        actual_beta = (
             net_delta
             * self._position.multiplier
             * self._latest_underlying_price
             / equity
         )
+        return actual_beta / max(self._position_scale, 1e-12)
 
     def set_scale(self, scale):
         if not 0 <= scale <= 1:
             raise ValueError("option scale must be between zero and one")
         self._scale = scale
-        if scale == 0 and self._position is not None:
+        if (
+            self._position is not None
+            and scale < self._position_scale - 1e-12
+        ):
             self._force_exit = True
 
     def on_data(self, data: Slice):
@@ -320,6 +337,7 @@ class DefinedRiskOptionSleeve:
             "tickets": tickets,
             "selection": selection,
             "sizing": sizing,
+            "scale": self._scale,
             "submitted": self.time,
         }
         self._pending_signal = None
@@ -339,14 +357,25 @@ class DefinedRiskOptionSleeve:
             OrderStatus.INVALID,
         }
         if any(status in failed for status in statuses):
+            pending_kind = self._pending_combo["kind"]
             filled = [ticket for ticket in tickets if ticket.quantity_filled != 0]
             if filled and len(filled) != len(tickets):
                 self._statistics["OPTION_NAKED_LEG_COUNT"] += 1
             self._statistics["OPTION_COMBO_REJECTED"] += 1
             if any(status == OrderStatus.INVALID for status in statuses):
                 self._statistics["OPTION_COMBO_INVALID"] += 1
+                for ticket in tickets:
+                    if ticket.status != OrderStatus.INVALID:
+                        continue
+                    response = ticket.get_most_recent_order_response()
+                    self._last_invalid_response = (
+                        f"{response.error_code}:{response.error_message}"
+                    )[:240]
+                    break
             else:
                 self._statistics["OPTION_COMBO_STALE_CANCELED"] += 1
+            if pending_kind == "EXIT":
+                self._last_exit_attempt_date = self.time.date()
             self._pending_combo = None
             return
         if not all(status == OrderStatus.FILLED for status in statuses):
@@ -378,6 +407,10 @@ class DefinedRiskOptionSleeve:
                 sizing.entry_fees,
                 "OPEN",
             )
+            self._position_scale = pending["scale"]
+            if self._scale < self._position_scale - 1e-12:
+                self._force_exit = True
+            self._last_exit_attempt_date = None
             self._current_max_loss = sizing.total_max_loss
             self._statistics["OPTION_SPREADS_OPENED"] += 1
         else:
@@ -396,6 +429,8 @@ class DefinedRiskOptionSleeve:
                     RealizedOptionLoss(self.time.date(), -pnl)
                 )
             self._position = None
+            self._position_scale = 0.0
+            self._last_exit_attempt_date = None
             self._current_max_loss = 0.0
             self._force_exit = False
             self._statistics["OPTION_SPREADS_CLOSED"] += 1
@@ -417,6 +452,8 @@ class DefinedRiskOptionSleeve:
 
     def _evaluate_exit(self):
         if self._latest_chain is None or self._position is None:
+            return
+        if self._last_exit_attempt_date == self.time.date():
             return
         short_symbol = self._contract_symbols.get(self._position.short_symbol)
         long_symbol = self._contract_symbols.get(self._position.long_symbol)
@@ -455,28 +492,45 @@ class DefinedRiskOptionSleeve:
             return
         short_mid = (quote.short_bid + quote.short_ask) / 2
         long_mid = (quote.long_bid + quote.long_ask) / 2
-        short_limit = self._round_up(
-            short_mid
-            + (quote.short_ask - quote.short_bid)
-            * 0.25
-            * self._slippage_multiplier,
+        short_limit = max(
             tick,
+            self._round_up(
+                short_mid
+                + (quote.short_ask - quote.short_bid)
+                * 0.25
+                * self._slippage_multiplier,
+                tick,
+            ),
         )
-        long_limit = self._round_down(
-            long_mid
-            - (quote.long_ask - quote.long_bid)
-            * 0.25
-            * self._slippage_multiplier,
+        long_limit = max(
             tick,
+            self._round_down(
+                long_mid
+                - (quote.long_ask - quote.long_bid)
+                * 0.25
+                * self._slippage_multiplier,
+                tick,
+            ),
         )
-        tickets = self.combo_leg_limit_order(
-            [
-                Leg.create(short_symbol, 1, short_limit),
-                Leg.create(long_symbol, -1, long_limit),
-            ],
-            self._position.contracts,
-            tag=f"option:defined-risk-exit:{decision.action}",
-        )
+        if decision.dte <= 2:
+            tickets = self.combo_market_order(
+                [
+                    Leg.create(short_symbol, 1),
+                    Leg.create(long_symbol, -1),
+                ],
+                self._position.contracts,
+                tag=f"option:defined-risk-exit:{decision.action}:market-fallback",
+            )
+        else:
+            tickets = self.combo_leg_limit_order(
+                [
+                    Leg.create(short_symbol, 1, short_limit),
+                    Leg.create(long_symbol, -1, long_limit),
+                ],
+                self._position.contracts,
+                tag=f"option:defined-risk-exit:{decision.action}",
+            )
+        self._last_exit_attempt_date = self.time.date()
         self._pending_combo = {
             "kind": "EXIT",
             "tickets": tickets,
@@ -507,7 +561,7 @@ class DefinedRiskOptionSleeve:
             for item in self._realized_losses
             if self.time.date() - timedelta(days=365) <= item.realized_at <= self.time.date()
         )
-        result = dict(self._statistics)
+        result: dict[str, object] = dict(self._statistics)
         result["OPTION_LICENSE_STATUS"] = self._license_status
         result["OPTION_COST_MODEL_STATUS"] = (
             "PER_LEG_ADVERSE_LIMITS_FEES_AND_REGULATORY_OVERLAY"
@@ -517,4 +571,5 @@ class DefinedRiskOptionSleeve:
             self._position is not None
         ).lower()
         result["OPTION_CURRENT_MAX_LOSS"] = f"{self._current_max_loss:.2f}"
+        result["OPTION_LAST_INVALID_RESPONSE"] = self._last_invalid_response
         return result

@@ -14,6 +14,7 @@ from cloud_adapters.reality_models import (
     EquityAdverseSlippageModel,
     FutureOneTickSlippageModel,
     IntegratedFeeModel,
+    OptionAdverseSlippageModel,
 )
 from costs import equity_execution
 from execution import REGULATORY_POLICY_STATUS
@@ -132,6 +133,10 @@ class SpyPlusTenWalkForward(QCAlgorithm):
             security.set_slippage_model(
                 FutureOneTickSlippageModel(self._slippage_multiplier)
             )
+        elif security.type == SecurityType.OPTION:
+            security.set_slippage_model(
+                OptionAdverseSlippageModel(self._slippage_multiplier)
+            )
 
     def can_trade_now(self):
         return self.time.date() >= self._trading_start
@@ -242,10 +247,15 @@ class SpyPlusTenWalkForward(QCAlgorithm):
     def _rebalance_spy_core(self):
         if self._risk_allocation is None or not self.can_trade_now():
             return
-        target = (
-            self._risk_allocation.core_spy_weight
-            + self._equity.spy_hedge_weight()
+        equity_scale = self._equity.applied_scale()
+        futures_scale = self._futures.applied_scale()
+        option_scale = self._option.applied_scale()
+        core = 1.0 - (
+            self._equity.estimated_beta() * equity_scale
+            + self._futures.estimated_beta() * futures_scale
+            + self._option.estimated_beta() * option_scale
         )
+        target = core + self._equity.spy_hedge_weight()
         before = len(self.transactions.get_orders())
         self.set_holdings(self._spy, target, tag="portfolio:spy-core-plus-equity-hedge")
         self._core_order_count += len(self.transactions.get_orders()) - before
@@ -265,7 +275,7 @@ class SpyPlusTenWalkForward(QCAlgorithm):
                 gross += abs(float(holding.quantity) * float(security.price) * multiplier)
             elif security.type == SecurityType.EQUITY:
                 gross += abs(float(holding.holdings_value))
-        gross += self._option.proposed_gross() * equity
+        gross += self._option.actual_gross() * equity
         return gross / equity if equity > 0 else float("inf")
 
     def _record_daily_evidence(self):
@@ -347,6 +357,7 @@ class SpyPlusTenWalkForward(QCAlgorithm):
             "OPTION_NAKED_LEG_COUNT",
             "OPTION_MAX_LOSS_BREACH_COUNT",
             "OPTION_COMBO_INVALID",
+            "TREND_SCALE_VIOLATION_COUNT",
         )
         for key in zero_required:
             if int(statistics.get(key, 0)) != 0:
@@ -355,6 +366,15 @@ class SpyPlusTenWalkForward(QCAlgorithm):
             self._gate_failures.add("EQUITY_LICENSE_UNAVAILABLE")
         if statistics.get("OPTION_LICENSE_STATUS") != "AVAILABLE":
             self._gate_failures.add("OPTION_LICENSE_UNAVAILABLE")
+        if int(statistics.get("TREND_ORDER_COUNT", 0)) <= 0:
+            self._gate_failures.add("TREND_ORDER_COUNT")
+        for key, value in statistics.items():
+            if not key.startswith("ROOT_"):
+                continue
+            encoded = str(value)
+            for required in ("history=true", "contract=true", "signal=true"):
+                if required not in encoded:
+                    self._gate_failures.add(f"{key}_{required.split('=')[0].upper()}")
 
     def on_end_of_algorithm(self):
         statistics = {}

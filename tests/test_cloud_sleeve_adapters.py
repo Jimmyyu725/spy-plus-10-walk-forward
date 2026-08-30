@@ -45,13 +45,17 @@ class CloudSleeveAdapterTests(unittest.TestCase):
         self.assertIn("def spy_hedge_weight(self):", source)
         self.assertNotIn("self.set_holdings(targets, True)", source)
         self.assertNotIn("PortfolioTarget(self._spy", source)
+        self.assertIn("scale >= self._last_scale", source)
 
     def test_futures_uses_only_actual_contracts_and_current_scale(self):
         source = (ADAPTERS / "futures_sleeve.py").read_text(encoding="utf-8")
         self.assertIn("def set_scale(self, scale):", source)
-        self.assertIn("weights[root] * self._scale", source)
+        self.assertIn("weights[root] * self._allowed_scale", source)
         self.assertIn("select_volume_contract", source)
         self.assertNotIn("market_order(future.symbol", source)
+        self.assertIn("self._contract_snapshots", source)
+        self.assertIn("def applied_scale(self):", source)
+        self.assertNotIn("self._chains[root] = chain", source)
 
     def test_option_retains_atomic_defined_risk_and_scale(self):
         source = (ADAPTERS / "option_sleeve.py").read_text(encoding="utf-8")
@@ -62,7 +66,12 @@ class CloudSleeveAdapterTests(unittest.TestCase):
             source,
         )
         self.assertIn('"DRAWDOWN_EXIT"', source)
-        self.assertNotIn("market_order(", source)
+        self.assertIn("combo_market_order", source)
+        self.assertIn("def actual_gross(self):", source)
+        self.assertIn("short_limit = max(", source)
+        self.assertIn("long_limit = max(", source)
+        self.assertIn("self._last_exit_attempt_date", source)
+        self.assertNotIn("self.market_order(", source)
 
 
 if __name__ == "__main__":

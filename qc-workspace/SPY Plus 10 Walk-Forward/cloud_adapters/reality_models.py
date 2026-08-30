@@ -74,3 +74,19 @@ class FutureOneTickSlippageModel:
     def get_slippage_approximation(self, asset, order):
         tick = float(asset.symbol_properties.minimum_price_variation)
         return tick * self._multiplier
+
+
+class OptionAdverseSlippageModel:
+    """Adverse per-leg slippage for the near-expiry atomic market fallback."""
+
+    def __init__(self, multiplier):
+        self._multiplier = float(multiplier)
+        if self._multiplier not in {1.0, 2.0}:
+            raise ValueError("slippage multiplier must be 1 or 2")
+
+    def get_slippage_approximation(self, asset, order):
+        tick = float(asset.symbol_properties.minimum_price_variation)
+        spread_fraction = 0.0
+        if asset.bid_price >= 0 and asset.ask_price >= asset.bid_price:
+            spread_fraction = float(asset.ask_price - asset.bid_price) * 0.25
+        return max(tick, spread_fraction) * self._multiplier
