@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 from pathlib import Path
 import sys
 
@@ -25,11 +26,25 @@ def main() -> int:
         print(f"audit-baseline:FAIL:missing={','.join(missing)}")
         return 1
     contract = load_baseline_contract(PROJECT / "baseline-contract.json")
+    manifest = json.loads(
+        (PROJECT / "project-manifest.json").read_text(encoding="utf-8")
+    )
     main_source = (PROJECT / "main.py").read_text(encoding="utf-8")
-    if contract.formal_evaluation or contract.live_trading:
+    if (
+        contract.formal_evaluation
+        or contract.live_trading
+        or manifest.get("formal_evaluation")
+        or manifest.get("live_trading")
+    ):
         print("audit-baseline:FAIL:unsafe-contract")
         return 1
-    if "self.set_end_date(2015, 1, 9)" not in main_source:
+    end_date = manifest.get("end_date", "")
+    try:
+        year, month, day = (int(part) for part in end_date.split("-"))
+    except (AttributeError, TypeError, ValueError):
+        print("audit-baseline:FAIL:invalid-end-date")
+        return 1
+    if f"self.set_end_date({year}, {month}, {day})" not in main_source:
         print("audit-baseline:FAIL:unbounded-smoke")
         return 1
     print("audit-baseline:PASS:formal_evaluation=false:live_trading=false")

@@ -39,8 +39,11 @@ def _round_down(value: float, tick: float) -> float:
     return floor((value + 1e-12) / tick) * tick
 
 
-def _entry_fees(contracts: int) -> float:
-    return 2 * max(contracts * 0.65, 1.0)
+def _entry_fees(contracts: int, regulatory_fee_per_contract: float = 0.0) -> float:
+    return (
+        2 * max(contracts * 0.65, 1.0)
+        + contracts * regulatory_fee_per_contract
+    )
 
 
 def size_defined_risk_spread(
@@ -51,6 +54,7 @@ def size_defined_risk_spread(
     realized_losses: list[RealizedOptionLoss],
     per_contract_annual_pnl_volatility: float,
     slippage_multiplier: float = 1.0,
+    regulatory_fee_per_contract: float = 0.0,
 ) -> DefinedRiskSizing:
     short_put, long_put = spread.short_put, spread.long_put
     if as_of < spread.entry_time:
@@ -63,15 +67,19 @@ def size_defined_risk_spread(
         raise OptionRiskError("long protection must be lower strike and same expiry")
     if short_put.multiplier != long_put.multiplier:
         raise OptionRiskError("leg multipliers must match")
-    if not all(
-        isfinite(value) and value > 0
-        for value in (
-            equity,
-            per_contract_annual_pnl_volatility,
-            slippage_multiplier,
-            short_put.minimum_tick,
-            long_put.minimum_tick,
+    if (
+        not all(
+            isfinite(value) and value > 0
+            for value in (
+                equity,
+                per_contract_annual_pnl_volatility,
+                slippage_multiplier,
+                short_put.minimum_tick,
+                long_put.minimum_tick,
+            )
         )
+        or not isfinite(regulatory_fee_per_contract)
+        or regulatory_fee_per_contract < 0
     ):
         raise OptionRiskError("risk inputs must be finite and positive")
 
@@ -106,13 +114,16 @@ def size_defined_risk_spread(
     approximate = floor(available_budget / max_loss_per_contract)
     contracts = min(approximate, volatility_contracts)
     while contracts > 0:
-        total_loss = contracts * max_loss_per_contract + _entry_fees(contracts)
+        total_loss = contracts * max_loss_per_contract + _entry_fees(
+            contracts,
+            regulatory_fee_per_contract,
+        )
         if total_loss <= available_budget + 1e-9:
             break
         contracts -= 1
     if contracts <= 0:
         raise OptionRiskError("no whole spread fits the defined-risk budget")
-    entry_fees = _entry_fees(contracts)
+    entry_fees = _entry_fees(contracts, regulatory_fee_per_contract)
     total_max_loss = contracts * max_loss_per_contract + entry_fees
     return DefinedRiskSizing(
         contracts,

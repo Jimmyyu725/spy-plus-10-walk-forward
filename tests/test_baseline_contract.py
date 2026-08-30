@@ -38,6 +38,14 @@ class BaselineContractTests(unittest.TestCase):
             with self.assertRaisesRegex(BaselineContractError, "contract mismatch"):
                 load_baseline_contract(path)
 
+    def test_explicit_embedded_fallback_supports_cloud_source_deployments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "not-deployed.json"
+            contract = load_baseline_contract(missing, allow_embedded=True)
+        self.assertEqual(contract.initial_cash, "1000000")
+        self.assertFalse(contract.formal_evaluation)
+        self.assertFalse(contract.live_trading)
+
     def test_cloud_main_imports_every_baseline_module(self):
         source = (PROJECT_DIR / "main.py").read_text(encoding="utf-8")
         for marker in (

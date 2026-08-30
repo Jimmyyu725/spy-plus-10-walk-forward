@@ -58,38 +58,75 @@ def validate_foundation(root: Path) -> FoundationStatus:
         raise FoundationValidationError("missing required file: main.py")
     main_source = main_path.read_text(encoding="utf-8")
 
-    expected_manifest = {
-        "benchmark": "SPY",
-        "end_date": "2015-01-09",
-        "formal_evaluation": False,
-        "initial_cash": 1_000_000,
-        "language": "Python",
-        "live_trading": False,
-        "mode": "foundation-smoke",
-        "name": PROJECT_NAME,
-        "start_date": "2015-01-02",
+    expected_manifests = {
+        "foundation-smoke": {
+            "benchmark": "SPY",
+            "end_date": "2015-01-09",
+            "formal_evaluation": False,
+            "initial_cash": 1_000_000,
+            "language": "Python",
+            "live_trading": False,
+            "mode": "foundation-smoke",
+            "name": PROJECT_NAME,
+            "start_date": "2015-01-02",
+        },
+        "portfolio-integration-smoke": {
+            "benchmark": "SPY",
+            "end_date": "2015-03-31",
+            "formal_evaluation": False,
+            "initial_cash": 1_000_000,
+            "language": "Python",
+            "live_trading": False,
+            "mode": "portfolio-integration-smoke",
+            "name": PROJECT_NAME,
+            "start_date": "2012-01-01",
+            "trading_start_date": "2013-01-02",
+        },
     }
+    expected_manifest = expected_manifests.get(manifest.get("mode"))
+    if expected_manifest is None:
+        raise FoundationValidationError(f"unsupported project mode: {manifest.get('mode')}")
     if manifest != expected_manifest:
         differing = sorted(set(manifest.items()) ^ set(expected_manifest.items()))
         raise FoundationValidationError(f"project manifest mismatch: {differing}")
     if manifest["live_trading"]:
         raise FoundationValidationError("live_trading must remain false")
 
-    required_markers = (
-        "class SpyPlusTenWalkForward(QCAlgorithm)",
-        "self.set_start_date(2015, 1, 2)",
-        "self.set_end_date(2015, 1, 9)",
-        "self.set_cash(1_000_000)",
-        'self.add_equity("SPY", Resolution.DAILY)',
-        "self.set_benchmark(self.spy)",
-    )
+    required_markers_by_mode = {
+        "foundation-smoke": (
+            "class SpyPlusTenWalkForward(QCAlgorithm)",
+            "self.set_start_date(2015, 1, 2)",
+            "self.set_end_date(2015, 1, 9)",
+            "self.set_cash(1_000_000)",
+            'self.add_equity("SPY", Resolution.DAILY)',
+            "self.set_benchmark(self.spy)",
+        ),
+        "portfolio-integration-smoke": (
+            "class SpyPlusTenWalkForward(QCAlgorithm)",
+            "self.set_start_date(2012, 1, 1)",
+            "self.set_end_date(2015, 3, 31)",
+            "self.set_cash(1_000_000)",
+            "self.set_benchmark(self._spy)",
+            "BrokerageName.QUANT_CONNECT_BROKERAGE",
+            'mode != "integration-smoke"',
+        ),
+    }
+    required_markers = required_markers_by_mode[manifest["mode"]]
     missing = [marker for marker in required_markers if marker not in main_source]
     if missing:
         raise FoundationValidationError(f"main.py missing markers: {missing}")
-    forbidden_markers = ("set_brokerage_model", "set_live_mode", "add_option", "add_future")
-    present = [marker for marker in forbidden_markers if marker in main_source]
-    if present:
-        raise FoundationValidationError(f"foundation smoke contains forbidden markers: {present}")
+    if manifest["mode"] == "foundation-smoke":
+        forbidden_markers = (
+            "set_brokerage_model",
+            "set_live_mode",
+            "add_option",
+            "add_future",
+        )
+        present = [marker for marker in forbidden_markers if marker in main_source]
+        if present:
+            raise FoundationValidationError(
+                f"foundation smoke contains forbidden markers: {present}"
+            )
 
     _scan_for_credentials(root)
     return FoundationStatus(
