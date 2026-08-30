@@ -1,0 +1,23 @@
+{
+  "annualized_iv_premium_minimum": 0.05,
+  "entry_time_et": "10:00",
+  "formal_evaluation": false,
+  "long_put_target_delta": -0.10,
+  "max_dte": 60,
+  "max_quote_spread_to_mid": 0.20,
+  "max_trade_loss_fraction": 0.005,
+  "min_dte": 30,
+  "min_open_interest": 100,
+  "min_volume": 1,
+  "profit_take_fraction_of_credit": 0.50,
+  "realized_volatility_lookback_days": 20,
+  "rolling_loss_budget_fraction": 0.03,
+  "short_put_target_delta": -0.20,
+  "sma_lookback_days": 200,
+  "target_annual_volatility": 0.03,
+  "target_dte": 45,
+  "time_exit_dte": 21,
+  "underlying": "SPY",
+  "weekly_evaluation": "first-complete-trading-day-close-next-trading-day-entry",
+  "live_trading": false
+}
