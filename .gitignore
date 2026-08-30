@@ -7,9 +7,9 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+.worktrees/
 
 # Generated QuantConnect artifacts
 backtests/
 research/
 reports/generated/
-
