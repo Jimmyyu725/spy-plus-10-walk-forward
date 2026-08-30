@@ -50,6 +50,12 @@ class BaselineContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, source)
 
+    def test_decimal_imports_do_not_collide_with_algorithm_imports(self):
+        for name in ("benchmark.py", "costs.py", "ledger.py", "metrics.py", "main.py"):
+            source = (PROJECT_DIR / name).read_text(encoding="utf-8")
+            self.assertNotIn("from decimal import Decimal\n", source)
+            self.assertIn("from decimal import Decimal as PythonDecimal", source)
+
 
 if __name__ == "__main__":
     unittest.main()

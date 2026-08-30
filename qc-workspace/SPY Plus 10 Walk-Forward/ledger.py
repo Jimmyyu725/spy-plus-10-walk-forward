@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal as PythonDecimal
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 class LedgerError(RuntimeError):
@@ -16,11 +16,11 @@ class LedgerError(RuntimeError):
 @dataclass(frozen=True)
 class LedgerSnapshot:
     as_of: date
-    cash: Decimal
-    market_value: Decimal
-    equity: Decimal
-    fees: Decimal
-    margin_used: Decimal
+    cash: PythonDecimal
+    market_value: PythonDecimal
+    equity: PythonDecimal
+    fees: PythonDecimal
+    margin_used: PythonDecimal
 
 
 class CashLedger:
@@ -28,9 +28,9 @@ class CashLedger:
         self.cash = _d(initial_cash)
         if self.cash <= 0:
             raise ValueError("initial_cash must be positive")
-        self.positions: dict[str, Decimal] = {}
-        self.total_fees = Decimal("0")
-        self.margin_used = Decimal("0")
+        self.positions: dict[str, PythonDecimal] = {}
+        self.total_fees = PythonDecimal("0")
+        self.margin_used = PythonDecimal("0")
 
     def book_fill(
         self,
@@ -47,7 +47,7 @@ class CashLedger:
         if not symbol or quantity_value == 0 or price <= 0 or fees < 0:
             raise LedgerError("invalid fill")
         self.cash -= quantity_value * price + fees
-        new_quantity = self.positions.get(symbol, Decimal("0")) + quantity_value
+        new_quantity = self.positions.get(symbol, PythonDecimal("0")) + quantity_value
         if new_quantity == 0:
             self.positions.pop(symbol, None)
         else:
@@ -61,7 +61,7 @@ class CashLedger:
         self.margin_used = amount
 
     def mark_to_market(self, prices: dict[str, object], as_of: date) -> LedgerSnapshot:
-        market_value = Decimal("0")
+        market_value = PythonDecimal("0")
         for symbol, quantity in self.positions.items():
             if symbol not in prices:
                 raise LedgerError(f"missing mark for held security: {symbol}")

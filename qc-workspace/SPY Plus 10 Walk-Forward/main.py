@@ -1,5 +1,5 @@
 from AlgorithmImports import *
-from decimal import Decimal
+from decimal import Decimal as PythonDecimal
 
 from audit import AuditTrail
 from baseline import load_baseline_contract
@@ -13,7 +13,7 @@ class SpyPlusTenWalkForward(QCAlgorithm):
     """Cloud-only connectivity smoke test; not a formal strategy evaluation."""
 
     def initialize(self):
-        assert equity_execution("BUY", 1, "100").commission == Decimal("1.00")
+        assert equity_execution("BUY", 1, "100").commission == PythonDecimal("1.00")
         self.set_start_date(2015, 1, 2)
         self.set_end_date(2015, 1, 9)
         self.set_cash(1_000_000)

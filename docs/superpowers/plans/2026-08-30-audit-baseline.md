@@ -319,11 +319,11 @@ Create `qc-workspace/SPY Plus 10 Walk-Forward/costs.py`:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal as PythonDecimal, ROUND_CEILING, ROUND_FLOOR
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 def _side(value: str) -> str:
@@ -333,7 +333,7 @@ def _side(value: str) -> str:
     return value
 
 
-def _positive(value, name: str) -> Decimal:
+def _positive(value, name: str) -> PythonDecimal:
     result = _d(value)
     if result <= 0:
         raise ValueError(f"{name} must be positive")
@@ -342,13 +342,13 @@ def _positive(value, name: str) -> Decimal:
 
 @dataclass(frozen=True)
 class ExecutionCost:
-    fill_price: Decimal
-    commission: Decimal
-    regulatory_fee: Decimal
-    slippage: Decimal
+    fill_price: PythonDecimal
+    commission: PythonDecimal
+    regulatory_fee: PythonDecimal
+    slippage: PythonDecimal
 
     @property
-    def total_cost(self) -> Decimal:
+    def total_cost(self) -> PythonDecimal:
         return self.commission + self.regulatory_fee + self.slippage
 
 
@@ -366,15 +366,15 @@ def equity_execution(
     quantity = _positive(quantity, "quantity")
     reference = _positive(reference_price, "reference_price")
     multiplier = _positive(slippage_multiplier, "slippage_multiplier")
-    half_spread = Decimal("0")
+    half_spread = PythonDecimal("0")
     if bid is not None and ask is not None:
         bid_value, ask_value = _d(bid), _d(ask)
         if bid_value <= 0 or ask_value < bid_value:
             raise ValueError("invalid bid/ask")
         half_spread = (ask_value - bid_value) / 2
-    adverse = max(reference * Decimal("0.0005"), half_spread) * multiplier
+    adverse = max(reference * PythonDecimal("0.0005"), half_spread) * multiplier
     fill = reference + adverse if side == "BUY" else reference - adverse
-    commission = max(quantity * Decimal("0.005"), Decimal("1.00"))
+    commission = max(quantity * PythonDecimal("0.005"), PythonDecimal("1.00"))
     regulatory = _d(regulatory_fee)
     if regulatory < 0:
         raise ValueError("regulatory_fee must be non-negative")
@@ -398,7 +398,7 @@ def futures_execution(
     contract_multiplier = _positive(multiplier, "multiplier")
     adverse = tick * _positive(slippage_multiplier, "slippage_multiplier")
     fill = reference + adverse if side == "BUY" else reference - adverse
-    commission = contracts * Decimal("2.50")
+    commission = contracts * PythonDecimal("2.50")
     regulatory = _d(regulatory_fee)
     if regulatory < 0:
         raise ValueError("regulatory_fee must be non-negative")
@@ -423,18 +423,19 @@ def option_execution(
         raise ValueError("ask must not be below bid")
     tick = _positive(min_tick, "min_tick")
     mid = (bid_value + ask_value) / 2
-    adverse = (ask_value - bid_value) * Decimal("0.25")
-    raw = mid + adverse * _positive(slippage_multiplier, "slippage_multiplier")
+    multiplier = _positive(slippage_multiplier, "slippage_multiplier")
+    adverse = (ask_value - bid_value) * PythonDecimal("0.25") * multiplier
+    raw = mid + adverse
     rounding = ROUND_CEILING
     if side == "SELL":
-        raw = mid - adverse * _positive(slippage_multiplier, "slippage_multiplier")
+        raw = mid - adverse
         rounding = ROUND_FLOOR
     fill = (raw / tick).to_integral_value(rounding=rounding) * tick
-    commission = max(contracts * Decimal("0.65"), Decimal("1.00"))
+    commission = max(contracts * PythonDecimal("0.65"), PythonDecimal("1.00"))
     regulatory = _d(regulatory_fee)
     if regulatory < 0:
         raise ValueError("regulatory_fee must be non-negative")
-    slippage = contracts * abs(fill - mid) * Decimal("100")
+    slippage = contracts * abs(fill - mid) * PythonDecimal("100")
     return ExecutionCost(fill, commission, regulatory, slippage)
 ```
 
@@ -529,11 +530,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal as PythonDecimal
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 class LedgerError(RuntimeError):
@@ -543,11 +544,11 @@ class LedgerError(RuntimeError):
 @dataclass(frozen=True)
 class LedgerSnapshot:
     as_of: date
-    cash: Decimal
-    market_value: Decimal
-    equity: Decimal
-    fees: Decimal
-    margin_used: Decimal
+    cash: PythonDecimal
+    market_value: PythonDecimal
+    equity: PythonDecimal
+    fees: PythonDecimal
+    margin_used: PythonDecimal
 
 
 class CashLedger:
@@ -555,9 +556,9 @@ class CashLedger:
         self.cash = _d(initial_cash)
         if self.cash <= 0:
             raise ValueError("initial_cash must be positive")
-        self.positions: dict[str, Decimal] = {}
-        self.total_fees = Decimal("0")
-        self.margin_used = Decimal("0")
+        self.positions: dict[str, PythonDecimal] = {}
+        self.total_fees = PythonDecimal("0")
+        self.margin_used = PythonDecimal("0")
 
     def book_fill(self, symbol: str, quantity, fill_price, *, commission="0", regulatory_fee="0"):
         quantity_value = _d(quantity)
@@ -566,7 +567,7 @@ class CashLedger:
         if not symbol or quantity_value == 0 or price <= 0 or fees < 0:
             raise LedgerError("invalid fill")
         self.cash -= quantity_value * price + fees
-        new_quantity = self.positions.get(symbol, Decimal("0")) + quantity_value
+        new_quantity = self.positions.get(symbol, PythonDecimal("0")) + quantity_value
         if new_quantity == 0:
             self.positions.pop(symbol, None)
         else:
@@ -580,7 +581,7 @@ class CashLedger:
         self.margin_used = amount
 
     def mark_to_market(self, prices: dict[str, object], as_of: date) -> LedgerSnapshot:
-        market_value = Decimal("0")
+        market_value = PythonDecimal("0")
         for symbol, quantity in self.positions.items():
             if symbol not in prices:
                 raise LedgerError(f"missing mark for held security: {symbol}")
@@ -603,19 +604,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal as PythonDecimal, ROUND_FLOOR
 
 from costs import equity_execution
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 @dataclass(frozen=True)
 class PricePoint:
     as_of: date
-    total_return_price: Decimal
+    total_return_price: PythonDecimal
 
     def __init__(self, as_of: date, total_return_price):
         object.__setattr__(self, "as_of", as_of)
@@ -625,15 +626,15 @@ class PricePoint:
 @dataclass(frozen=True)
 class EquityPoint:
     as_of: date
-    value: Decimal
+    value: PythonDecimal
 
 
 @dataclass(frozen=True)
 class BenchmarkResult:
-    shares: Decimal
-    entry_cash: Decimal
+    shares: PythonDecimal
+    entry_cash: PythonDecimal
     equity: tuple[EquityPoint, ...]
-    liquidation_value: Decimal
+    liquidation_value: PythonDecimal
 
 
 def build_spy_buy_hold(points: list[PricePoint], *, initial_cash) -> BenchmarkResult:
@@ -764,11 +765,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal as PythonDecimal
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 class MetricsError(RuntimeError):
@@ -778,7 +779,7 @@ class MetricsError(RuntimeError):
 @dataclass(frozen=True)
 class EquityPoint:
     as_of: date
-    value: Decimal
+    value: PythonDecimal
 
     def __init__(self, as_of: date, value):
         object.__setattr__(self, "as_of", as_of)
@@ -791,10 +792,10 @@ class AnnualGateRow:
     period: str
     start_date: date
     end_date: date
-    strategy_return: Decimal
-    spy_return: Decimal
-    excess_return: Decimal
-    hurdle_return: Decimal
+    strategy_return: PythonDecimal
+    spy_return: PythonDecimal
+    excess_return: PythonDecimal
+    hurdle_return: PythonDecimal
     status: str
 
 
@@ -804,7 +805,7 @@ class AnnualGateResult:
     overall_status: str
 
 
-def _validated_map(points: list[EquityPoint], label: str) -> dict[date, Decimal]:
+def _validated_map(points: list[EquityPoint], label: str) -> dict[date, PythonDecimal]:
     if not points:
         raise MetricsError(f"missing {label} equity")
     if any(left.as_of >= right.as_of for left, right in zip(points, points[1:])):
@@ -839,7 +840,7 @@ def evaluate_annual_gates(
         start, end = year_dates[0], year_dates[-1]
         strategy_return = strategy_map[end] / prior_strategy - 1
         spy_return = spy_map[end] / prior_spy - 1
-        hurdle = spy_return + Decimal("0.10")
+        hurdle = spy_return + PythonDecimal("0.10")
         period = (
             "PARTIAL_YEAR"
             if year == as_of.year and as_of < date(year, 12, 31)
@@ -1067,10 +1068,10 @@ class AuditBaselineRecordTests(unittest.TestCase):
             project_id="123456",
             backtest_id="abc-def",
             result_url="https://www.quantconnect.com/project/123456/abc-def",
-            test_count=26,
+            test_count=36,
         )
         self.assertIn("Formal evaluation: false", text)
-        self.assertIn("Local fixture tests: 26 passed", text)
+        self.assertIn("Local fixture tests: 36 passed", text)
         self.assertIn("QuantConnect backtest ID: abc-def", text)
 
 
@@ -1092,6 +1093,12 @@ Append this test to `tests/test_baseline_contract.py` inside `BaselineContractTe
             "from metrics import EquityPoint",
         ):
             self.assertIn(marker, source)
+
+    def test_decimal_imports_do_not_collide_with_algorithm_imports(self):
+        for name in ("benchmark.py", "costs.py", "ledger.py", "metrics.py", "main.py"):
+            source = (PROJECT_DIR / name).read_text(encoding="utf-8")
+            self.assertNotIn("from decimal import Decimal\n", source)
+            self.assertIn("from decimal import Decimal as PythonDecimal", source)
 ```
 
 - [ ] **Step 2: Run the new tests and verify both fail for missing integration**
@@ -1169,10 +1176,10 @@ from metrics import EquityPoint
 Add this pure self-check as the first statement of `initialize`:
 
 ```python
-        assert equity_execution("BUY", 1, "100").commission == Decimal("1.00")
+        assert equity_execution("BUY", 1, "100").commission == PythonDecimal("1.00")
 ```
 
-Also import `Decimal` from `decimal`. Do not extend the date range, add assets, enable formal evaluation, configure a brokerage, or place live orders.
+Also import `Decimal` as `PythonDecimal` from `decimal` to avoid LEAN's `System.Decimal` name. Do not extend the date range, add assets, enable formal evaluation, configure a brokerage, or place live orders.
 
 - [ ] **Step 5: Add the repository validator**
 
@@ -1272,7 +1279,7 @@ python3 scripts/verify_cloud_foundation.py
 python3 scripts/verify_audit_baseline.py
 ```
 
-Expected: 35 tests PASS, foundation PASS, and audit baseline PASS.
+Expected: 36 tests PASS, foundation PASS, and audit baseline PASS.
 
 - [ ] **Step 7: Commit the cloud-ready audit baseline before running it**
 
@@ -1310,7 +1317,7 @@ python3 ../scripts/write_audit_baseline_record.py \
   --lean-version "$(lean --version | head -n 1)" \
   --git-commit "$(git -C .. rev-parse HEAD)" \
   --result-url "$backtest_url" \
-  --test-count 35 \
+  --test-count 36 \
   --output ../docs/audit-baseline.md
 ```
 

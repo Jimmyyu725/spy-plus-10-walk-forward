@@ -11,10 +11,10 @@ class AuditBaselineRecordTests(unittest.TestCase):
             project_id="123456",
             backtest_id="abc-def",
             result_url="https://www.quantconnect.com/project/123456/abc-def",
-            test_count=35,
+            test_count=36,
         )
         self.assertIn("Formal evaluation: false", text)
-        self.assertIn("Local fixture tests: 35 passed", text)
+        self.assertIn("Local fixture tests: 36 passed", text)
         self.assertIn("QuantConnect backtest ID: abc-def", text)
 
 

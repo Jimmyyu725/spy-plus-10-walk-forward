@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal as PythonDecimal, ROUND_FLOOR
 
 from costs import equity_execution
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 @dataclass(frozen=True)
 class PricePoint:
     as_of: date
-    total_return_price: Decimal
+    total_return_price: PythonDecimal
 
     def __init__(self, as_of: date, total_return_price):
         object.__setattr__(self, "as_of", as_of)
@@ -24,15 +24,15 @@ class PricePoint:
 @dataclass(frozen=True)
 class EquityPoint:
     as_of: date
-    value: Decimal
+    value: PythonDecimal
 
 
 @dataclass(frozen=True)
 class BenchmarkResult:
-    shares: Decimal
-    entry_cash: Decimal
+    shares: PythonDecimal
+    entry_cash: PythonDecimal
     equity: tuple[EquityPoint, ...]
-    liquidation_value: Decimal
+    liquidation_value: PythonDecimal
 
 
 def build_spy_buy_hold(points: list[PricePoint], *, initial_cash) -> BenchmarkResult:

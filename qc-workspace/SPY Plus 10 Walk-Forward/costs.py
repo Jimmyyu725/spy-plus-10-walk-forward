@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal as PythonDecimal, ROUND_CEILING, ROUND_FLOOR
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 def _side(value: str) -> str:
@@ -15,7 +15,7 @@ def _side(value: str) -> str:
     return value
 
 
-def _positive(value, name: str) -> Decimal:
+def _positive(value, name: str) -> PythonDecimal:
     result = _d(value)
     if result <= 0:
         raise ValueError(f"{name} must be positive")
@@ -24,13 +24,13 @@ def _positive(value, name: str) -> Decimal:
 
 @dataclass(frozen=True)
 class ExecutionCost:
-    fill_price: Decimal
-    commission: Decimal
-    regulatory_fee: Decimal
-    slippage: Decimal
+    fill_price: PythonDecimal
+    commission: PythonDecimal
+    regulatory_fee: PythonDecimal
+    slippage: PythonDecimal
 
     @property
-    def total_cost(self) -> Decimal:
+    def total_cost(self) -> PythonDecimal:
         return self.commission + self.regulatory_fee + self.slippage
 
 
@@ -48,15 +48,15 @@ def equity_execution(
     quantity = _positive(quantity, "quantity")
     reference = _positive(reference_price, "reference_price")
     multiplier = _positive(slippage_multiplier, "slippage_multiplier")
-    half_spread = Decimal("0")
+    half_spread = PythonDecimal("0")
     if bid is not None and ask is not None:
         bid_value, ask_value = _d(bid), _d(ask)
         if bid_value <= 0 or ask_value < bid_value:
             raise ValueError("invalid bid/ask")
         half_spread = (ask_value - bid_value) / 2
-    adverse = max(reference * Decimal("0.0005"), half_spread) * multiplier
+    adverse = max(reference * PythonDecimal("0.0005"), half_spread) * multiplier
     fill = reference + adverse if side == "BUY" else reference - adverse
-    commission = max(quantity * Decimal("0.005"), Decimal("1.00"))
+    commission = max(quantity * PythonDecimal("0.005"), PythonDecimal("1.00"))
     regulatory = _d(regulatory_fee)
     if regulatory < 0:
         raise ValueError("regulatory_fee must be non-negative")
@@ -80,7 +80,7 @@ def futures_execution(
     contract_multiplier = _positive(multiplier, "multiplier")
     adverse = tick * _positive(slippage_multiplier, "slippage_multiplier")
     fill = reference + adverse if side == "BUY" else reference - adverse
-    commission = contracts * Decimal("2.50")
+    commission = contracts * PythonDecimal("2.50")
     regulatory = _d(regulatory_fee)
     if regulatory < 0:
         raise ValueError("regulatory_fee must be non-negative")
@@ -106,16 +106,16 @@ def option_execution(
     tick = _positive(min_tick, "min_tick")
     mid = (bid_value + ask_value) / 2
     multiplier = _positive(slippage_multiplier, "slippage_multiplier")
-    adverse = (ask_value - bid_value) * Decimal("0.25") * multiplier
+    adverse = (ask_value - bid_value) * PythonDecimal("0.25") * multiplier
     raw = mid + adverse
     rounding = ROUND_CEILING
     if side == "SELL":
         raw = mid - adverse
         rounding = ROUND_FLOOR
     fill = (raw / tick).to_integral_value(rounding=rounding) * tick
-    commission = max(contracts * Decimal("0.65"), Decimal("1.00"))
+    commission = max(contracts * PythonDecimal("0.65"), PythonDecimal("1.00"))
     regulatory = _d(regulatory_fee)
     if regulatory < 0:
         raise ValueError("regulatory_fee must be non-negative")
-    slippage = contracts * abs(fill - mid) * Decimal("100")
+    slippage = contracts * abs(fill - mid) * PythonDecimal("100")
     return ExecutionCost(fill, commission, regulatory, slippage)

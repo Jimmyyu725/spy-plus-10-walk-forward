@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal as PythonDecimal
 
 
-def _d(value) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
+def _d(value) -> PythonDecimal:
+    return value if isinstance(value, PythonDecimal) else PythonDecimal(str(value))
 
 
 class MetricsError(RuntimeError):
@@ -16,7 +16,7 @@ class MetricsError(RuntimeError):
 @dataclass(frozen=True)
 class EquityPoint:
     as_of: date
-    value: Decimal
+    value: PythonDecimal
 
     def __init__(self, as_of: date, value):
         object.__setattr__(self, "as_of", as_of)
@@ -29,10 +29,10 @@ class AnnualGateRow:
     period: str
     start_date: date
     end_date: date
-    strategy_return: Decimal
-    spy_return: Decimal
-    excess_return: Decimal
-    hurdle_return: Decimal
+    strategy_return: PythonDecimal
+    spy_return: PythonDecimal
+    excess_return: PythonDecimal
+    hurdle_return: PythonDecimal
     status: str
 
 
@@ -42,7 +42,7 @@ class AnnualGateResult:
     overall_status: str
 
 
-def _validated_map(points: list[EquityPoint], label: str) -> dict[date, Decimal]:
+def _validated_map(points: list[EquityPoint], label: str) -> dict[date, PythonDecimal]:
     if not points:
         raise MetricsError(f"missing {label} equity")
     if any(left.as_of >= right.as_of for left, right in zip(points, points[1:])):
@@ -77,7 +77,7 @@ def evaluate_annual_gates(
         start, end = year_dates[0], year_dates[-1]
         strategy_return = strategy_map[end] / prior_strategy - 1
         spy_return = spy_map[end] / prior_spy - 1
-        hurdle = spy_return + Decimal("0.10")
+        hurdle = spy_return + PythonDecimal("0.10")
         period = (
             "PARTIAL_YEAR"
             if year == as_of.year and as_of < date(year, 12, 31)
