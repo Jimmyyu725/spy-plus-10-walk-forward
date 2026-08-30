@@ -1,0 +1,19 @@
+{
+  "allocation": "inverse-126-day-volatility",
+  "beta_target": 0.0,
+  "dollar_volume_lookback_days": 20,
+  "formal_evaluation": false,
+  "gross_notional_cap": 0.50,
+  "liquidity_rank": 500,
+  "live_trading": false,
+  "minimum_price": 5.0,
+  "momentum_lookback_days": 252,
+  "momentum_skip_days": 21,
+  "portfolio_size": 30,
+  "quality_weights": {"gross_profit_to_assets": 0.50, "roe": 0.50},
+  "rebalance": "month-end-completed-data-next-open-plus-30-minutes",
+  "residual_volatility_lookback_days": 126,
+  "score_weights": {"low_residual_volatility": 0.25, "momentum": 0.50, "quality": 0.25},
+  "target_annual_volatility": 0.05,
+  "winsor_percentiles": [0.01, 0.99]
+}
