@@ -76,6 +76,13 @@ class FoundationValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(FoundationValidationError, "live_trading"):
             validate_foundation(self.root)
 
+    def test_repository_foundation_contract(self):
+        repository_root = Path(__file__).resolve().parents[1]
+        status = validate_foundation(repository_root)
+        self.assertEqual(status.project_name, "SPY Plus 10 Walk-Forward")
+        self.assertEqual(status.mode, "foundation-smoke")
+        self.assertFalse(status.formal_evaluation)
+
 
 if __name__ == "__main__":
     unittest.main()
