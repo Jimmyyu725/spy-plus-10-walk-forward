@@ -34,9 +34,13 @@ class SpyPlusTenWalkForward(QCAlgorithm):
 
     def initialize(self):
         project = Path(__file__).resolve().parent
-        baseline = load_baseline_contract(project / "baseline-contract.json")
+        baseline = load_baseline_contract(
+            project / "baseline-contract.json",
+            allow_embedded=True,
+        )
         integration = load_portfolio_integration_contract(
-            project / "portfolio-integration-contract.json"
+            project / "portfolio-integration-contract.json",
+            allow_embedded=True,
         )
         if baseline.formal_evaluation or baseline.live_trading:
             raise RuntimeError("baseline must remain non-formal and non-live")

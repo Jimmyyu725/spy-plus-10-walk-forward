@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
 from math import isfinite, sqrt
@@ -33,13 +34,22 @@ class PortfolioRiskError(RuntimeError):
     """Raised when portfolio risk cannot be verified from completed inputs."""
 
 
-def load_portfolio_integration_contract(path: Path) -> dict:
+def load_portfolio_integration_contract(
+    path: Path,
+    *,
+    allow_embedded: bool = False,
+) -> dict:
     if not path.is_file():
-        raise PortfolioRiskError(f"missing portfolio integration contract: {path}")
-    try:
-        contract = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise PortfolioRiskError("invalid portfolio integration contract") from error
+        if not allow_embedded:
+            raise PortfolioRiskError(
+                f"missing portfolio integration contract: {path}"
+            )
+        contract = deepcopy(EXPECTED_INTEGRATION_CONTRACT)
+    else:
+        try:
+            contract = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise PortfolioRiskError("invalid portfolio integration contract") from error
     if contract != EXPECTED_INTEGRATION_CONTRACT:
         raise PortfolioRiskError("portfolio integration contract mismatch")
     return contract

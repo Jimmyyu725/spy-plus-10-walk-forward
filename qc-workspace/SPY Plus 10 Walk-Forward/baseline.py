@@ -48,13 +48,20 @@ class BaselineContract:
     live_trading: bool
 
 
-def load_baseline_contract(path: Path) -> BaselineContract:
+def load_baseline_contract(
+    path: Path,
+    *,
+    allow_embedded: bool = False,
+) -> BaselineContract:
     if not path.is_file():
-        raise BaselineContractError(f"missing contract: {path}")
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BaselineContractError(f"invalid contract JSON: {path}") from exc
+        if not allow_embedded:
+            raise BaselineContractError(f"missing contract: {path}")
+        raw = EXPECTED_CONTRACT
+    else:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BaselineContractError(f"invalid contract JSON: {path}") from exc
     if raw != EXPECTED_CONTRACT:
         if isinstance(raw, dict) and raw.get("live_trading") is True:
             raise BaselineContractError("live_trading must remain false")

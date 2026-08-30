@@ -44,6 +44,17 @@ class PortfolioRiskTests(unittest.TestCase):
             with self.assertRaises(PortfolioRiskError):
                 load_portfolio_integration_contract(path)
 
+    def test_explicit_embedded_fallback_supports_cloud_source_deployments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "not-deployed.json"
+            contract = load_portfolio_integration_contract(
+                missing,
+                allow_embedded=True,
+            )
+        self.assertFalse(contract["formal_evaluation"])
+        self.assertFalse(contract["live_trading"])
+        self.assertEqual(contract["module_target_volatility"]["FUTURES"], 0.07)
+
     def test_risk_budget_water_filling_caps_each_sleeve_at_forty_percent(self):
         result = coordinate_portfolio_risk(
             forecasts(),
