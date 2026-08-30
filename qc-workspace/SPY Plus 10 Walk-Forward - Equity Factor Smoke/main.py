@@ -66,6 +66,7 @@ class SPYPlus10WalkForwardEquityFactorSmoke(QCAlgorithm):
         self._selected_count = 0
         self._order_count = 0
         self._future_input_count = 0
+        self._rejected_post_cutoff_count = 0
         self._missing_fundamental_count = 0
         self._beta_after = 0.0
         self._gross_exposure = 0.0
@@ -154,7 +155,7 @@ class SPYPlus10WalkForwardEquityFactorSmoke(QCAlgorithm):
             for symbol, bar in bars.items():
                 bar_day = bar.end_time.date()
                 if bar_day > self._last_cutoff:
-                    self._future_input_count += 1
+                    self._rejected_post_cutoff_count += 1
                     continue
                 prices[symbol].append(
                     EquityPrice(
@@ -212,6 +213,7 @@ class SPYPlus10WalkForwardEquityFactorSmoke(QCAlgorithm):
             "EQUITY_SELECTED_COUNT": self._selected_count,
             "EQUITY_ORDER_COUNT": self._order_count,
             "EQUITY_FUTURE_INPUT_COUNT": self._future_input_count,
+            "EQUITY_REJECTED_POST_CUTOFF_COUNT": self._rejected_post_cutoff_count,
             "EQUITY_MISSING_FUNDAMENTAL_COUNT": self._missing_fundamental_count,
             "EQUITY_BETA_AFTER": f"{self._beta_after:.12f}",
             "EQUITY_GROSS_EXPOSURE": f"{self._gross_exposure:.12f}",

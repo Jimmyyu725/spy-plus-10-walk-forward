@@ -37,10 +37,12 @@ class EquitySmokeSyncTests(unittest.TestCase):
             '"EQUITY_SELECTED_COUNT"',
             '"EQUITY_ORDER_COUNT"',
             '"EQUITY_FUTURE_INPUT_COUNT"',
+            '"EQUITY_REJECTED_POST_CUTOFF_COUNT"',
             '"EQUITY_LICENSE_STATUS"',
             "after_market_open(self._spy, 30)",
         ):
             self.assertIn(marker, source)
+        self.assertNotIn("self._future_input_count += 1", source)
 
 
 if __name__ == "__main__":
