@@ -8,15 +8,28 @@ PROJECT = ROOT / "qc-workspace" / "SPY Plus 10 Walk-Forward"
 
 
 class PortfolioIntegrationCloudTests(unittest.TestCase):
-    def test_manifest_is_nonformal_integration_smoke(self):
+    def test_manifest_is_formal_frozen_evaluation(self):
         manifest = json.loads(
             (PROJECT / "project-manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["mode"], "portfolio-integration-smoke")
+        self.assertEqual(manifest["mode"], "frozen-evaluation")
         self.assertEqual(manifest["start_date"], "2012-01-01")
-        self.assertEqual(manifest["end_date"], "2015-03-31")
-        self.assertFalse(manifest["formal_evaluation"])
+        self.assertEqual(manifest["trading_start_date"], "2015-01-02")
+        self.assertEqual(manifest["end_date"], "2026-08-28")
+        self.assertTrue(manifest["formal_evaluation"])
         self.assertFalse(manifest["live_trading"])
+
+    def test_main_requires_exact_frozen_parameters_and_rejects_live_mode(self):
+        source = (PROJECT / "main.py").read_text(encoding="utf-8")
+        for marker in (
+            'mode != "frozen-evaluation"',
+            'run_label not in {"base", "double"}',
+            'expected_label = "base" if self._slippage_multiplier == 1.0 else "double"',
+            "self.set_start_date(2012, 1, 1)",
+            "self.set_end_date(2026, 8, 28)",
+            "self._trading_start = date(2015, 1, 2)",
+        ):
+            self.assertIn(marker, source)
 
     def test_main_is_orchestration_only_with_raw_spy_and_daily_evidence(self):
         source = (PROJECT / "main.py").read_text(encoding="utf-8")
@@ -57,6 +70,23 @@ class PortfolioIntegrationCloudTests(unittest.TestCase):
         ):
             self.assertIn(marker, source)
         self.assertIn("self._gate_failures.add", source)
+
+    def test_main_persists_exact_formal_evidence_and_structured_status(self):
+        source = (PROJECT / "main.py").read_text(encoding="utf-8")
+        for marker in (
+            "build_object_store_key",
+            "encode_evidence",
+            "self.object_store.save_bytes",
+            '"FORMAL_EVIDENCE_KEY"',
+            '"FORMAL_EVIDENCE_SAVE_STATUS"',
+            '"FORMAL_DATA_AUDIT_STATUS"',
+            '"FORMAL_SAFETY_GATE_STATUS"',
+            '"FORMAL_ANNUAL_GATE_STATUS"',
+            '"FORMAL_OVERALL_STATUS"',
+            "self._cumulative_fees",
+            "self._daily_evidence",
+        ):
+            self.assertIn(marker, source)
 
     def test_reality_models_apply_frozen_costs_and_only_allowed_slippage(self):
         source = (

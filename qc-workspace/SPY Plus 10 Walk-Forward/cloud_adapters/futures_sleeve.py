@@ -1,5 +1,6 @@
 from AlgorithmImports import *
 from collections import deque
+from zoneinfo import ZoneInfo
 
 from futures_allocation import AllocationError, allocate_trend
 from futures_roll import ContractSnapshot, RollSelectionError, select_volume_contract
@@ -50,6 +51,7 @@ class FuturesTrendSleeve:
         self._contract_snapshots = {}
         self._contract_symbols = {}
         self._contract_snapshot_dates = {}
+        self._price_cutoffs = {}
         self._pending = None
         self._last_weights = None
         self._last_signal_date = None
@@ -63,6 +65,8 @@ class FuturesTrendSleeve:
         self._order_count = 0
         self._continuous_order_count = 0
         self._scale_violation_count = 0
+        self._open_audits = {}
+        self._audit_samples = []
         self._coverage = {
             root: {
                 "history": False,
@@ -114,15 +118,21 @@ class FuturesTrendSleeve:
 
     def on_data(self, data: Slice):
         self._capture_chains(data)
+        self._execute_pending_if_due()
         current_week = self.time.date().isocalendar()[:2]
         if (
             self._last_observed_week is not None
             and current_week != self._last_observed_week
         ):
             self._compute_weekly_targets()
-            self._execute_pending_if_due()
         self._capture_completed_prices(data)
         self._last_observed_week = current_week
+
+    @staticmethod
+    def _aware(value):
+        return value if value.tzinfo is not None else value.replace(
+            tzinfo=ZoneInfo("America/New_York")
+        )
 
     def _capture_chains(self, data):
         for root, future in self._futures.items():
@@ -163,10 +173,14 @@ class FuturesTrendSleeve:
             if history:
                 self._returns[root].append(float(bar.close / history[-1].close - 1))
             history.append(DailyPrice(self.time.date(), float(bar.close)))
+            self._price_cutoffs[root] = self._aware(bar.end_time)
             self._coverage[root]["history"] = len(history) == 253
 
     def _compute_weekly_targets(self):
-        if any(not self._prices[root] for root in ROOT_CONSTANTS):
+        if any(
+            not self._prices[root] or root not in self._price_cutoffs
+            for root in ROOT_CONSTANTS
+        ):
             return
         signal_date = min(self._prices[root][-1].as_of for root in ROOT_CONSTANTS)
         scores = {}
@@ -187,7 +201,16 @@ class FuturesTrendSleeve:
             allocation = allocate_trend(scores, histories)
         except AllocationError:
             return
-        self._pending = (signal_date, allocation.weights)
+        data_cutoff = max(self._price_cutoffs.values())
+        signal_time = self._aware(self.time)
+        if data_cutoff >= signal_time:
+            return
+        self._pending = {
+            "signal_date": signal_date,
+            "weights": allocation.weights,
+            "data_cutoff": data_cutoff,
+            "signal_time": signal_time,
+        }
         self._last_signal_date = signal_date
         self._proposed_gross = allocation.gross_notional
         self._estimated_beta = sum(
@@ -199,12 +222,21 @@ class FuturesTrendSleeve:
     def _execute_pending_if_due(self):
         if (
             self._pending is None
-            or self.time.date() <= self._pending[0]
+            or self.time.date() <= self._pending["signal_date"]
             or not self._algorithm.can_trade_now()
         ):
             return
-        _, weights = self._pending
-        if self._execute_weights(weights):
+        pending = self._pending
+        weights = pending["weights"]
+        order_time = self._aware(self.time)
+        if order_time <= pending["signal_time"]:
+            return
+        audit_context = {
+            "data_cutoff": pending["data_cutoff"],
+            "signal_time": pending["signal_time"],
+            "order_time": order_time,
+        }
+        if self._execute_weights(weights, audit_context=audit_context):
             self._last_weights = dict(weights)
             self._pending = None
 
@@ -257,7 +289,7 @@ class FuturesTrendSleeve:
         self._applied_scale = self._allowed_scale
         return True
 
-    def _execute_weights(self, weights):
+    def _execute_weights(self, weights, audit_context=None):
         selected = self._select_contracts()
         if selected is None:
             return False
@@ -276,12 +308,44 @@ class FuturesTrendSleeve:
             current_quantity = int(self.portfolio[symbol].quantity)
             delta = target_quantity - current_quantity
             if delta:
-                self.market_order(symbol, delta, tag=f"trend:target:{root}")
+                ticket = self.market_order(symbol, delta, tag=f"trend:target:{root}")
+                if audit_context is not None:
+                    self._open_audits[ticket.order_id] = {
+                        **audit_context,
+                        "module": "FUTURES",
+                        "root": root,
+                        "symbol": str(symbol),
+                        "quantity": delta,
+                        "order_id": ticket.order_id,
+                    }
                 self._order_count += 1
                 self._coverage[root]["order"] = True
             self._current_contract[root] = symbol
         self._applied_scale = self._allowed_scale
         return True
+
+    def on_order_event(self, order_event):
+        pending = self._open_audits.get(order_event.order_id)
+        if pending is None:
+            return
+        if order_event.status in {OrderStatus.CANCELED, OrderStatus.INVALID}:
+            self._open_audits.pop(order_event.order_id, None)
+            return
+        if order_event.status != OrderStatus.FILLED:
+            return
+        pending = self._open_audits.pop(order_event.order_id)
+        fill_time = self._aware(self.time)
+        if not (
+            pending["data_cutoff"]
+            < pending["signal_time"]
+            < pending["order_time"]
+            < fill_time
+        ):
+            return
+        self._audit_samples.append({**pending, "fill_time": fill_time})
+
+    def audit_samples(self):
+        return tuple(dict(sample) for sample in self._audit_samples)
 
     def statistics(self):
         result = {

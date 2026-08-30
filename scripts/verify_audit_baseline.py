@@ -31,9 +31,9 @@ def main() -> int:
     )
     main_source = (PROJECT / "main.py").read_text(encoding="utf-8")
     if (
-        contract.formal_evaluation
+        not contract.formal_evaluation
         or contract.live_trading
-        or manifest.get("formal_evaluation")
+        or not manifest.get("formal_evaluation")
         or manifest.get("live_trading")
     ):
         print("audit-baseline:FAIL:unsafe-contract")
@@ -47,7 +47,7 @@ def main() -> int:
     if f"self.set_end_date({year}, {month}, {day})" not in main_source:
         print("audit-baseline:FAIL:unbounded-smoke")
         return 1
-    print("audit-baseline:PASS:formal_evaluation=false:live_trading=false")
+    print("audit-baseline:PASS:formal_evaluation=true:live_trading=false")
     return 0
 
 

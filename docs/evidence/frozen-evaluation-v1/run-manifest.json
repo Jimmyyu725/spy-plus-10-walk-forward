@@ -1,0 +1,87 @@
+{
+  "schema_version": "frozen-evaluation-run-manifest-v1",
+  "formal_status": "UNVERIFIED",
+  "cloud_annual_statistics_status": "FAIL",
+  "reason": "The Object Store daily-evidence artifacts were not saved, so annual equity curves, maximum drawdown, holdings, fees, and strict chronology samples cannot be independently recomputed or inspected.",
+  "repository": {
+    "branch": "feature/frozen-evaluation",
+    "frozen_commit": "66b630342c3171cb30c8f05faa7cac69706e35f6",
+    "remote": "Jimmyyu725/spy-plus-10-walk-forward"
+  },
+  "environment": {
+    "control_plane": "Atlas Ubuntu 24.04 x86_64",
+    "lean_cli_version": "1.0.229",
+    "lean_engine_version": "2.5.0.0.18041",
+    "organization_id": "02b6527137d1f317d170d3d37c80d59d",
+    "project_id": 35858890,
+    "cloud_compile_validation_id": "c5e0035f8f5214c95e7b6eb5c3465b47-fc5688587e0ff21a139c44e5ff32f0f7",
+    "base_formal_compile_id": "443c9ba6c31bc22f992559f3ba7d9088-fc5688587e0ff21a139c44e5ff32f0f7"
+  },
+  "evaluation": {
+    "initial_cash_usd": 1000000,
+    "warmup_start": "2012-01-01",
+    "trading_start": "2015-01-02",
+    "evaluation_end": "2026-08-28",
+    "timezone": "America/New_York",
+    "annual_rule": "strategy_return >= spy_total_return + 0.10",
+    "taxes_included": false
+  },
+  "datasets": [
+    {
+      "name": "QuantConnect US Equity price data and Security Master",
+      "normalization": "SCALED_RAW_POINT_IN_TIME",
+      "license_status": "AVAILABLE"
+    },
+    {
+      "name": "QuantConnect point-in-time US Equity fundamentals",
+      "license_status": "AVAILABLE"
+    },
+    {
+      "name": "QuantConnect Futures price data and historical contract mapping",
+      "license_status": "AVAILABLE_IN_COMPLETED_BACKTEST"
+    },
+    {
+      "name": "QuantConnect US Equity Options minute chains",
+      "license_status": "AVAILABLE"
+    }
+  ],
+  "dataset_version_evidence": "QuantConnect does not expose raw hosted dataset hashes in the archived response. Project ID, snapshot IDs, backtest IDs, dates, engine version, license statistics, and compressed API responses are retained as the strongest available identifiers.",
+  "runs": {
+    "base": {
+      "name": "frozen-evaluation-v1-base-66b6303",
+      "backtest_id": "0ac19b9710e4c8e985cc475bc7f21788",
+      "snapshot_id": 35867312,
+      "created_utc": "2026-08-30 18:31:21",
+      "parameters": {
+        "evaluation_mode": "frozen-evaluation",
+        "evaluation_run_label": "base",
+        "slippage_multiplier": "1"
+      },
+      "completed": true,
+      "api_archive_fetched_utc": "2026-08-30T21:15:53.526985+00:00",
+      "order_rows": 13546,
+      "trade_rows": 11683,
+      "object_store_evidence_key": "35858890/frozen-evaluation-v1/base-0ac19b9710e4c8e985cc475bc7f21788.json.gz",
+      "object_store_evidence_bytes": 0,
+      "object_store_evidence_status": "UNVERIFIED"
+    },
+    "double": {
+      "name": "frozen-evaluation-v1-double-66b6303",
+      "backtest_id": "2f5c039144959e6ccfb0ef2dbdf27e82",
+      "snapshot_id": 35869791,
+      "created_utc": "2026-08-30 19:56:38",
+      "parameters": {
+        "evaluation_mode": "frozen-evaluation",
+        "evaluation_run_label": "double",
+        "slippage_multiplier": "2"
+      },
+      "completed": true,
+      "api_archive_fetched_utc": "2026-08-30T21:35:48.900561+00:00",
+      "order_rows": 13497,
+      "trade_rows": 11650,
+      "object_store_evidence_key": "35858890/frozen-evaluation-v1/double-2f5c039144959e6ccfb0ef2dbdf27e82.json.gz",
+      "object_store_evidence_bytes": 0,
+      "object_store_evidence_status": "UNVERIFIED"
+    }
+  }
+}

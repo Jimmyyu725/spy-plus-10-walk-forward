@@ -25,12 +25,16 @@ EXPECTED_CONTRACT = {
         },
     },
     "current_year_label": "PARTIAL_YEAR",
+    "evaluation_end": "2026-08-28",
     "evaluation_start": "2015-01-01",
-    "formal_evaluation": False,
+    "formal_evaluation": True,
     "initial_cash": "1000000",
     "live_trading": False,
+    "objective_run_label": "base",
     "project_name": "SPY Plus 10 Walk-Forward",
     "schema_version": 1,
+    "stress_annual_required_for_pass": False,
+    "stress_required": True,
     "taxes_included": False,
 }
 

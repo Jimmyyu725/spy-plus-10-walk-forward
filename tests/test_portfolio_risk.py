@@ -51,7 +51,7 @@ class PortfolioRiskTests(unittest.TestCase):
                 missing,
                 allow_embedded=True,
             )
-        self.assertFalse(contract["formal_evaluation"])
+        self.assertTrue(contract["formal_evaluation"])
         self.assertFalse(contract["live_trading"])
         self.assertEqual(contract["module_target_volatility"]["FUTURES"], 0.07)
 

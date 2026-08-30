@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from tests.project_path import PROJECT_DIR  # noqa: F401
 from option_lifecycle import (
@@ -60,6 +60,12 @@ class OptionLifecycleTests(unittest.TestCase):
                 "SHORT", "LONG", ENTRY, ENTRY.date() + timedelta(days=45),
                 95, 100, 1.0, 1, 100, 2.0, "OPEN",
             )
+
+    def test_strict_aware_timeline_is_accepted_for_formal_audit(self):
+        cutoff = datetime(2015, 1, 5, 21, tzinfo=timezone.utc)
+        signal = cutoff + timedelta(minutes=1)
+        order = signal + timedelta(hours=17)
+        validate_decision_timeline(cutoff, signal, order)
 
 
 if __name__ == "__main__":
