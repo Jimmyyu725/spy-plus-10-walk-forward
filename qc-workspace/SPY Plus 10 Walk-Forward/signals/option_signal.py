@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from math import isfinite, sqrt
 
 
@@ -28,7 +28,7 @@ class AtmIvObservation:
 @dataclass(frozen=True)
 class OptionRegimeSignal:
     cutoff: date
-    signal_time: date
+    signal_time: datetime
     close: float
     sma_200: float
     realized_volatility: float
@@ -127,9 +127,10 @@ def compute_option_regime(
     observations: list[AtmIvObservation],
     *,
     cutoff: date,
-    signal_time: date,
+    data_cutoff_time: datetime,
+    signal_time: datetime,
 ) -> OptionRegimeSignal:
-    if signal_time <= cutoff:
+    if data_cutoff_time.date() != cutoff or signal_time <= data_cutoff_time:
         raise OptionSignalError("signal_time must be after cutoff")
     completed = _completed_closes(prices, cutoff)
     sma_200 = sum(point.close for point in completed[-200:]) / 200

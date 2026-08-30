@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from tests.project_path import PROJECT_DIR  # noqa: F401
 from signals.option_signal import (
@@ -25,17 +25,29 @@ def closes(count=200, drift=0.001):
 
 
 class OptionSignalTests(unittest.TestCase):
+    @staticmethod
+    def times(cutoff):
+        data_cutoff = datetime.combine(cutoff, time(16, 0))
+        return data_cutoff, data_cutoff + timedelta(minutes=1)
+
     def test_regime_requires_price_above_sma_and_five_point_iv_premium(self):
         prices = closes()
         cutoff = prices[-1].as_of
         iv = [AtmIvObservation(cutoff, cutoff + timedelta(days=45), 121, 122, 0.25, 500)]
-        signal = compute_option_regime(prices, iv, cutoff=cutoff, signal_time=cutoff + timedelta(days=1))
+        data_cutoff, signal_time = self.times(cutoff)
+        signal = compute_option_regime(
+            prices, iv, cutoff=cutoff, data_cutoff_time=data_cutoff,
+            signal_time=signal_time,
+        )
         self.assertTrue(signal.eligible)
         self.assertGreaterEqual(signal.implied_volatility - signal.realized_volatility, 0.05)
 
         low_iv = [AtmIvObservation(cutoff, cutoff + timedelta(days=45), 121, 122, 0.01, 500)]
         self.assertFalse(
-            compute_option_regime(prices, low_iv, cutoff=cutoff, signal_time=cutoff + timedelta(days=1)).eligible
+            compute_option_regime(
+                prices, low_iv, cutoff=cutoff, data_cutoff_time=data_cutoff,
+                signal_time=signal_time,
+            ).eligible
         )
 
     def test_realized_volatility_uses_twenty_completed_returns(self):
@@ -55,17 +67,28 @@ class OptionSignalTests(unittest.TestCase):
     def test_signal_must_follow_cutoff(self):
         prices = closes()
         cutoff = prices[-1].as_of
+        data_cutoff, _ = self.times(cutoff)
         with self.assertRaisesRegex(OptionSignalError, "after cutoff"):
-            compute_option_regime(prices, [], cutoff=cutoff, signal_time=cutoff)
+            compute_option_regime(
+                prices, [], cutoff=cutoff, data_cutoff_time=data_cutoff,
+                signal_time=data_cutoff,
+            )
 
     def test_future_append_does_not_change_past_signal(self):
         prices = closes()
         cutoff = prices[-1].as_of
         observations = [AtmIvObservation(cutoff, cutoff + timedelta(days=45), 120, 120, 0.25, 100)]
-        before = compute_option_regime(prices, observations, cutoff=cutoff, signal_time=cutoff + timedelta(days=1))
+        data_cutoff, signal_time = self.times(cutoff)
+        before = compute_option_regime(
+            prices, observations, cutoff=cutoff,
+            data_cutoff_time=data_cutoff, signal_time=signal_time,
+        )
         prices.append(DailyClose(date(2030, 1, 1), 1))
         observations.append(AtmIvObservation(date(2030, 1, 1), date(2030, 3, 1), 1, 1, 9, 9999))
-        after = compute_option_regime(prices, observations, cutoff=cutoff, signal_time=cutoff + timedelta(days=1))
+        after = compute_option_regime(
+            prices, observations, cutoff=cutoff,
+            data_cutoff_time=data_cutoff, signal_time=signal_time,
+        )
         self.assertEqual(before, after)
 
 
