@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.vscode/
+.idea/
+.DS_Store
+
+# Generated QuantConnect artifacts
+backtests/
+research/
+reports/generated/
+
