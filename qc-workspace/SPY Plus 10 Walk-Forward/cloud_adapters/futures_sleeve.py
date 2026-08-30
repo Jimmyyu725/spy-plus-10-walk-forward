@@ -109,7 +109,7 @@ class FuturesTrendSleeve:
             and self._last_weights is not None
             and self._algorithm.can_trade_now()
         ):
-            if not self._execute_weights(self._last_weights):
+            if not self._reduce_current_contracts(self._last_weights):
                 self._scale_violation_count += 1
 
     def on_data(self, data: Slice):
@@ -225,6 +225,37 @@ class FuturesTrendSleeve:
             selected[root] = (symbols[choice.symbol], choice)
             self._coverage[root]["contract"] = True
         return selected
+
+    def _reduce_current_contracts(self, weights):
+        """Apply a risk cut to held actual contracts without opening or rolling."""
+        equity = float(self.portfolio.total_portfolio_value)
+        if equity <= 0:
+            return False
+        reductions = []
+        for root, symbol in self._current_contract.items():
+            current_quantity = int(self.portfolio[symbol].quantity)
+            if current_quantity == 0:
+                continue
+            security = self.securities[symbol]
+            price = float(security.price)
+            multiplier = float(security.symbol_properties.contract_multiplier)
+            if price <= 0 or multiplier <= 0:
+                return False
+            target_notional = weights[root] * self._allowed_scale * equity
+            target_quantity = int(target_notional / (price * multiplier))
+            if target_quantity * current_quantity <= 0:
+                target_quantity = 0
+            elif abs(target_quantity) > abs(current_quantity):
+                target_quantity = current_quantity
+            delta = target_quantity - current_quantity
+            if delta:
+                reductions.append((root, symbol, delta))
+        for root, symbol, delta in reductions:
+            self.market_order(symbol, delta, tag=f"trend:risk-reduction:{root}")
+            self._order_count += 1
+            self._coverage[root]["order"] = True
+        self._applied_scale = self._allowed_scale
+        return True
 
     def _execute_weights(self, weights):
         selected = self._select_contracts()

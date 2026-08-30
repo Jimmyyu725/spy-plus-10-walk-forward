@@ -56,6 +56,7 @@ class CloudSleeveAdapterTests(unittest.TestCase):
         self.assertIn("self._contract_snapshots", source)
         self.assertGreaterEqual(source.count("select_volume_contract("), 2)
         self.assertIn("def applied_scale(self):", source)
+        self.assertIn("def _reduce_current_contracts(self, weights):", source)
         self.assertNotIn("self._chains[root] = chain", source)
 
     def test_option_retains_atomic_defined_risk_and_scale(self):
