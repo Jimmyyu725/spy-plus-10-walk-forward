@@ -1,6 +1,9 @@
 import math
+import json
+import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from tests.project_path import PROJECT_DIR  # noqa: F401
 
@@ -10,6 +13,7 @@ from risk import (
     SleeveForecast,
     annualized_volatility,
     coordinate_portfolio_risk,
+    load_portfolio_integration_contract,
 )
 
 
@@ -28,6 +32,18 @@ def forecasts(*, gross=0.1, beta=None):
 
 
 class PortfolioRiskTests(unittest.TestCase):
+    def test_frozen_contract_loader_rejects_any_limit_change(self):
+        contract_path = PROJECT_DIR / "portfolio-integration-contract.json"
+        loaded = load_portfolio_integration_contract(contract_path)
+        self.assertEqual(loaded["total_gross_cap"], 2.0)
+        changed = dict(loaded)
+        changed["total_gross_cap"] = 2.1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            path.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaises(PortfolioRiskError):
+                load_portfolio_integration_contract(path)
+
     def test_risk_budget_water_filling_caps_each_sleeve_at_forty_percent(self):
         result = coordinate_portfolio_risk(
             forecasts(),

@@ -1,15 +1,48 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from math import isfinite, sqrt
+from pathlib import Path
 
 
 REQUIRED_SLEEVES = ("EQUITY", "FUTURES", "OPTION")
+EXPECTED_INTEGRATION_CONTRACT = {
+    "alpha_gross_cap": 1.0,
+    "beta_range": [0.8, 1.2],
+    "beta_target": 1.0,
+    "conservative_regulatory_fee_policy": "max-observed-2015-2026",
+    "drawdown_alpha_half": 0.15,
+    "drawdown_alpha_zero": 0.25,
+    "formal_evaluation": False,
+    "live_trading": False,
+    "max_alpha_risk_contribution": 0.4,
+    "module_target_volatility": {
+        "EQUITY": 0.05,
+        "FUTURES": 0.07,
+        "OPTION": 0.03,
+    },
+    "portfolio_target_volatility": 0.18,
+    "slippage_multipliers": [1.0, 2.0],
+    "total_gross_cap": 2.0,
+}
 
 
 class PortfolioRiskError(RuntimeError):
     """Raised when portfolio risk cannot be verified from completed inputs."""
+
+
+def load_portfolio_integration_contract(path: Path) -> dict:
+    if not path.is_file():
+        raise PortfolioRiskError(f"missing portfolio integration contract: {path}")
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PortfolioRiskError("invalid portfolio integration contract") from error
+    if contract != EXPECTED_INTEGRATION_CONTRACT:
+        raise PortfolioRiskError("portfolio integration contract mismatch")
+    return contract
 
 
 @dataclass(frozen=True)

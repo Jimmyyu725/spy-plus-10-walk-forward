@@ -1,11 +1,12 @@
 {
   "benchmark": "SPY",
-  "end_date": "2015-01-09",
+  "end_date": "2015-03-31",
   "formal_evaluation": false,
   "initial_cash": 1000000,
   "language": "Python",
   "live_trading": false,
-  "mode": "foundation-smoke",
+  "mode": "portfolio-integration-smoke",
   "name": "SPY Plus 10 Walk-Forward",
-  "start_date": "2015-01-02"
+  "start_date": "2012-01-01",
+  "trading_start_date": "2013-01-02"
 }

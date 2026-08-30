@@ -80,7 +80,7 @@ class FoundationValidationTests(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         status = validate_foundation(repository_root)
         self.assertEqual(status.project_name, "SPY Plus 10 Walk-Forward")
-        self.assertEqual(status.mode, "foundation-smoke")
+        self.assertEqual(status.mode, "portfolio-integration-smoke")
         self.assertFalse(status.formal_evaluation)
 
 
