@@ -170,7 +170,10 @@ def compute_trend_signal(root: str, series: list[DailyPrice], signal_date: date)
         raise TrendSignalError("prices must be positive")
     current = eligible[-1].close
     returns = [current / eligible[-(lookback + 1)].close - 1 for lookback in LOOKBACKS]
-    directions = tuple(1 if value > 0 else -1 if value < 0 else 0 for value in returns)
+    direction_values = tuple(
+        1 if value > 0 else -1 if value < 0 else 0 for value in returns
+    )
+    directions = (direction_values[0], direction_values[1], direction_values[2])
     return TrendSignal(root, eligible[-1].as_of, directions, sum(directions) / 3)
 ```
 
@@ -615,7 +618,7 @@ class PerContractFeeModel(FeeModel):
         return OrderFee(CashAmount(fee, "USD"))
 
 
-class OneTickSlippageModel(SlippageModel):
+class OneTickSlippageModel(ISlippageModel):
     def get_slippage_approximation(self, asset, order):
         return asset.symbol_properties.minimum_price_variation
 
@@ -763,7 +766,7 @@ class FuturesTrendSmokeAlgorithm(QCAlgorithm):
             self.set_summary_statistic(f"ROOT_{root}", encoded)
 ```
 
-Run `python3 scripts/sync_futures_trend_smoke.py` after writing `main.py`, then run `python3 -m unittest tests/test_futures_smoke_sync.py -v`. Expected: 2 tests PASS. Run the complete suite; expected total after this plan is 51 tests. Commit the generated project and sync script with `feat: add independent futures trend smoke project`.
+Run `python3 scripts/sync_futures_trend_smoke.py` after writing `main.py`, then run `python3 -m unittest tests/test_futures_smoke_sync.py -v`. Expected: 3 tests PASS. Run the complete suite; expected total after this plan is 52 tests. Commit the generated project and sync script with `feat: add independent futures trend smoke project`.
 
 ### Task 5: Run and archive the independent cloud backtest
 

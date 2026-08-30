@@ -43,7 +43,8 @@ def compute_trend_signal(
     returns = [
         current / eligible[-(lookback + 1)].close - 1 for lookback in LOOKBACKS
     ]
-    directions = tuple(
+    direction_values = tuple(
         1 if value > 0 else -1 if value < 0 else 0 for value in returns
     )
+    directions = (direction_values[0], direction_values[1], direction_values[2])
     return TrendSignal(root, eligible[-1].as_of, directions, sum(directions) / 3)
