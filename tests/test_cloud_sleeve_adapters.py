@@ -54,6 +54,7 @@ class CloudSleeveAdapterTests(unittest.TestCase):
         self.assertIn("select_volume_contract", source)
         self.assertNotIn("market_order(future.symbol", source)
         self.assertIn("self._contract_snapshots", source)
+        self.assertGreaterEqual(source.count("select_volume_contract("), 2)
         self.assertIn("def applied_scale(self):", source)
         self.assertNotIn("self._chains[root] = chain", source)
 

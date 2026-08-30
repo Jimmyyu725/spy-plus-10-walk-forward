@@ -142,6 +142,12 @@ class FuturesTrendSleeve:
                 snapshots.append(snapshot)
                 symbols[snapshot.symbol] = contract.symbol
             if snapshots:
+                try:
+                    select_volume_contract(snapshots, self.time.date())
+                except RollSelectionError:
+                    # Minute slices can contain chain refreshes with zero volume.
+                    # Preserve the last independently valid completed snapshot.
+                    continue
                 self._contract_snapshots[root] = snapshots
                 self._contract_symbols[root] = symbols
                 self._contract_snapshot_dates[root] = self.time.date()
@@ -252,6 +258,7 @@ class FuturesTrendSleeve:
             "TREND_ORDER_COUNT": self._order_count,
             "CONTINUOUS_ORDER_COUNT": self._continuous_order_count,
             "TREND_SCALE_VIOLATION_COUNT": self._scale_violation_count,
+            "TREND_VALID_SNAPSHOT_ROOTS": len(self._contract_snapshots),
             "TREND_PROPOSED_GROSS": f"{self._proposed_gross:.12f}",
             "TREND_ESTIMATED_BETA": f"{self._estimated_beta:.12f}",
         }
