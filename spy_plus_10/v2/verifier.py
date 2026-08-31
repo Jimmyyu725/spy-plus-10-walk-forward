@@ -40,7 +40,7 @@ _RUNTIME_REQUIRED_FIELDS = frozenset({
     "V2_STRING_STATUS", "V2_BYTES_STATUS", "V2_CHUNK_STATUS",
     "V2_MANIFEST_STATUS",
 })
-_RUNTIME_SHA256_FIELDS = frozenset({"V2_STRING_SHA256", "V2_BYTES_SHA256"})
+_RUNTIME_SHA256_FIELDS = ("V2_STRING_SHA256", "V2_BYTES_SHA256")
 _STATUSES = frozenset({"PASS", "PASS_WITH_STRING_FALLBACK", "UNVERIFIED"})
 
 
@@ -125,7 +125,9 @@ def extract_runtime_statistics(backtest) -> dict:
             "V2_STRING_SHA256": sha256_b64(b"S" * 1024),
             "V2_BYTES_SHA256": sha256_b64(bytes(index % 251 for index in range(1024))),
         }
-        for field in _RUNTIME_SHA256_FIELDS & statistics.keys():
+        for field in _RUNTIME_SHA256_FIELDS:
+            if field not in statistics:
+                continue
             value = statistics[field]
             try:
                 digest = base64.b64decode(value, validate=True)

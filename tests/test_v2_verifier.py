@@ -1,5 +1,8 @@
 import copy
 import json
+import os
+import subprocess
+import sys
 import unittest
 
 from spy_plus_10.v2.evidence import (
@@ -244,6 +247,25 @@ class V2VerifierTests(unittest.TestCase):
                 result = extract_runtime_statistics(response)
                 self.assertEqual(result["status"], "UNVERIFIED")
                 self.assertEqual(result["errors"], [code])
+
+    def test_runtime_hash_diagnostic_order_is_stable_across_hash_seeds(self):
+        program = """
+from tests.test_v2_verifier import archive_fixture
+from spy_plus_10.v2.evidence import sha256_b64
+from spy_plus_10.v2.verifier import extract_runtime_statistics
+archive = archive_fixture()
+statistics = archive[\"backtest\"][\"backtest\"][\"runtimeStatistics\"]
+statistics[\"V2_STRING_SHA256\"] = \"not-base64\"
+statistics[\"V2_BYTES_SHA256\"] = sha256_b64(b\"wrong\")
+print(extract_runtime_statistics(archive[\"backtest\"])[\"errors\"][0])
+"""
+        for seed in ("0", "1", "2", "3", "42", "123"):
+            with self.subTest(seed=seed):
+                environment = {**os.environ, "PYTHONHASHSEED": seed}
+                result = subprocess.run([sys.executable, "-c", program], capture_output=True,
+                                        check=False, cwd=".", env=environment, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "RUNTIME_SHA256_INVALID")
 
     def test_runtime_requires_each_non_hash_field(self):
         statistics = archive_fixture()["backtest"]["backtest"]["runtimeStatistics"]
