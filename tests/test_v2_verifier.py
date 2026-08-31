@@ -70,12 +70,12 @@ def archive_fixture(*, fallback=False):
     bytes_probe = bytes(index % 251 for index in range(1024))
     objects = {string_key: string_probe, chunk_key: encode_string_transport(chunk) if fallback else chunk,
                manifest_key: canonical_json_bytes(manifest)}
-    listed = [{"key": string_key, "size": len(string_probe)},
-              {"key": chunk_key, "size": len(objects[chunk_key])},
-              {"key": manifest_key, "size": len(objects[manifest_key])}]
+    listed = [{"key": string_key, "size": len(string_probe), "folder": False},
+              {"key": chunk_key, "size": len(objects[chunk_key]), "folder": False},
+              {"key": manifest_key, "size": len(objects[manifest_key]), "folder": False}]
     if not fallback:
         objects[bytes_key] = bytes_probe
-        listed.insert(1, {"key": bytes_key, "size": len(bytes_probe)})
+        listed.insert(1, {"key": bytes_key, "size": len(bytes_probe), "folder": False})
     statistics = {
         "V2_CAPABILITY_STATUS": "PASS_WITH_STRING_FALLBACK" if fallback else "PASS",
         "V2_TRANSPORT": transport,
@@ -241,6 +241,18 @@ class V2VerifierTests(unittest.TestCase):
             result = verify_archive(changed)
             self.assertEqual(result["overall_status"], "UNVERIFIED")
             self.assertIn(code, result["errors"])
+
+    def test_external_identity_anchor_rejects_coordinated_internal_tampering(self):
+        archive = archive_fixture()
+        anchor = {"project_id": 123, "backtest_id": "bt", "organization_id": "org"}
+        self.assertEqual(verify_archive(archive)["identity_assurance"], "INTERNAL_ONLY")
+        self.assertEqual(verify_archive(archive, expected_identity=anchor)["identity_assurance"], "EXTERNALLY_ANCHORED")
+        changed = copy.deepcopy(archive)
+        changed["backtest"]["backtest"]["organizationId"] = "evil-org"
+        changed["fetch_manifest"]["organization_id"] = "evil-org"
+        result = verify_archive(changed, expected_identity=anchor)
+        self.assertEqual(result["overall_status"], "UNVERIFIED")
+        self.assertIn("EXPECTED_IDENTITY_MISMATCH", result["errors"])
 
     def test_manifest_rejects_duplicate_keys_and_noncanonical_bytes(self):
         archive = archive_fixture()

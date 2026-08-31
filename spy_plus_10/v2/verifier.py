@@ -30,6 +30,10 @@ MAX_ARCHIVE_OBJECTS = 1024
 MAX_ERRORS = 64
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_GZIP_RAW_BYTES = 64 * 1024 * 1024
+MAX_TOTAL_ARCHIVE_OBJECT_BYTES = 64 * 1024 * 1024
+MAX_DECIMAL_CHARS = 256
+MAX_DECIMAL_DIGITS = 128
+MAX_DECIMAL_EXPONENT = 128
 _RUNTIME_FIELDS = frozenset({
     "V2_CAPABILITY_STATUS", "V2_TRANSPORT", "V2_EVIDENCE_PREFIX",
     "V2_STRING_KEY", "V2_BYTES_KEY", "V2_MANIFEST_KEY",
@@ -54,12 +58,18 @@ def _storage_bytes(value: object) -> bytes:
 def _decimal(value: object) -> Decimal:
     if type(value) is bool or not isinstance(value, (str, int, float, Decimal)):
         raise ValueError("not numeric")
+    text = str(value)
+    if len(text) > MAX_DECIMAL_CHARS:
+        raise ValueError("numeric text too long")
     try:
-        result = Decimal(str(value))
+        result = Decimal(text)
     except (InvalidOperation, ValueError) as error:
         raise ValueError("not numeric") from error
     if not result.is_finite():
         raise ValueError("not finite")
+    digits = result.as_tuple().digits
+    if len(digits) > MAX_DECIMAL_DIGITS or abs(result.as_tuple().exponent) > MAX_DECIMAL_EXPONENT:
+        raise ValueError("numeric value outside safe bounds")
     return result
 
 
@@ -359,7 +369,7 @@ def _validate_fetch_manifest(value: object, objects: Mapping, manifest: Mapping 
         return ["FETCH_MANIFEST_MALFORMED"]
 
 
-def _verify_archive(archive) -> dict:
+def _verify_archive(archive, expected_identity=None) -> dict:
     """Verify an in-memory archive, collecting all bounded diagnostic codes."""
     errors: list[str] = []
     if not isinstance(archive, Mapping):
@@ -368,9 +378,28 @@ def _verify_archive(archive) -> dict:
     if not isinstance(objects, Mapping) or len(objects) > MAX_ARCHIVE_OBJECTS:
         _add_error(errors, "ARCHIVE_OBJECTS_INVALID")
         objects = {}
+    else:
+        try:
+            total_object_bytes = sum(len(_storage_bytes(raw)) for raw in objects.values())
+            if total_object_bytes > MAX_TOTAL_ARCHIVE_OBJECT_BYTES:
+                _add_error(errors, "ARCHIVE_OBJECTS_TOTAL_SIZE_EXCEEDED")
+        except Exception:
+            _add_error(errors, "ARCHIVE_OBJECTS_INVALID")
     backtest_identity = _backtest_identity(archive.get("backtest"))
+    expected_valid = False
+    if expected_identity is not None:
+        if not isinstance(expected_identity, Mapping) or set(expected_identity) != {"project_id", "backtest_id", "organization_id"} or type(expected_identity["project_id"]) is not int or type(expected_identity["backtest_id"]) is not str or type(expected_identity["organization_id"]) is not str:
+            _add_error(errors, "EXPECTED_IDENTITY_INVALID")
+        elif backtest_identity is None or any(backtest_identity[key] != expected_identity[key] for key in expected_identity):
+            _add_error(errors, "EXPECTED_IDENTITY_MISMATCH")
+        else:
+            expected_valid = True
     for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, None, backtest_identity, archive.get("orders"), archive.get("trades")):
         _add_error(errors, error)
+    if expected_valid:
+        fetch = archive.get("fetch_manifest")
+        if not isinstance(fetch, Mapping) or any(fetch.get(key) != expected_identity[key] for key in expected_identity):
+            _add_error(errors, "EXPECTED_FETCH_IDENTITY_MISMATCH")
     runtime = extract_runtime_statistics(archive.get("backtest"))
     if runtime["status"] != "PASS":
         for error in runtime["errors"]: _add_error(errors, error)
@@ -385,7 +414,7 @@ def _verify_archive(archive) -> dict:
     if runtime["transport"] == "bytes": required.insert(1, runtime["bytes_key"])
     for key in required:
         if key not in metadata or key not in objects: _add_error(errors, "REQUIRED_OBJECT_MISSING")
-        elif type(objects[key]) not in (bytes, str) or metadata[key]["size"] != len(_storage_bytes(objects[key])):
+        elif metadata[key].get("folder") is not False or type(objects[key]) not in (bytes, str) or metadata[key]["size"] != len(_storage_bytes(objects[key])):
             _add_error(errors, "OBJECT_METADATA_SIZE_MISMATCH")
     string_probe = verify_probe("string", objects.get(runtime["string_key"]), 1024, runtime["string_sha256"])
     if string_probe["status"] != "PASS": _add_error(errors, string_probe["errors"][0])
@@ -411,7 +440,7 @@ def _verify_archive(archive) -> dict:
     for descriptor in manifest_result["chunks"]:
         key = descriptor["key"]
         if key not in metadata or key not in objects: _add_error(errors, "CHUNK_OBJECT_MISSING"); continue
-        if type(objects[key]) not in (bytes, str) or metadata[key]["size"] != len(_storage_bytes(objects[key])):
+        if metadata[key].get("folder") is not False or type(objects[key]) not in (bytes, str) or metadata[key]["size"] != len(_storage_bytes(objects[key])):
             _add_error(errors, "OBJECT_METADATA_SIZE_MISMATCH"); continue
         if key != build_chunk_key(manifest_result["project_id"], manifest_result["frozen_commit"], manifest_result["run_label"], manifest_result["algorithm_id"], descriptor["year"]): _add_error(errors, "CHUNK_KEY_IDENTITY_MISMATCH"); continue
         checked = verify_chunk(objects[key], runtime["transport"], descriptor)
@@ -425,14 +454,14 @@ def _verify_archive(archive) -> dict:
     _check_orders_and_trades(archive, errors)
     status = "UNVERIFIED" if errors else runtime["capability_status"]
     if status not in {"PASS", "PASS_WITH_STRING_FALLBACK"}: status = "UNVERIFIED"
-    return {"overall_status": status, "errors": errors, "runtime": runtime,
+    return {"overall_status": status, "identity_assurance": "EXTERNALLY_ANCHORED" if expected_valid else "INTERNAL_ONLY", "errors": errors, "runtime": runtime,
             "object_store": {"string_round_trip": string_probe["status"], "bytes_round_trip": bytes_probe["status"], "manifest": manifest_result["status"], "chunks": len(chunks)},
             "attribution": {"reconciliation": "PASS" if attribution["status"] == "PASS" else "UNVERIFIED", **{key: value for key, value in attribution.items() if key not in {"status", "errors"}}}}
 
 
-def verify_archive(archive) -> dict:
+def verify_archive(archive, expected_identity=None) -> dict:
     """Never raise for untrusted archive input; return a bounded UNVERIFIED report."""
     try:
-        return _verify_archive(archive)
+        return _verify_archive(archive, expected_identity)
     except Exception:
         return {"overall_status": "UNVERIFIED", "errors": ["ARCHIVE_MALFORMED"], "object_store": {}, "attribution": {}}

@@ -39,7 +39,14 @@ class FakeClient:
 
     def list_objects(self, organization_id, prefix):
         self._call("list", prefix)
-        return self.archive["object_list"]
+        entries = self.archive["object_list"]["objects"]
+        direct = [item for item in entries if item["key"].rsplit("/", 1)[0] == prefix]
+        if prefix.endswith("/capability") or prefix.endswith("/evidence"):
+            return {"objects": direct, "object_storage_used": self.archive["object_list"]["object_storage_used"]}
+        return {"objects": [item for item in direct if item["key"].endswith("manifest.json")] + [
+            {"key": prefix + "/capability", "size": 0, "folder": True},
+            {"key": prefix + "/evidence", "size": 0, "folder": True},
+        ], "object_storage_used": self.archive["object_list"]["object_storage_used"]}
 
     def download_object(self, organization_id, key):
         self._call("download", key)
@@ -56,13 +63,19 @@ class FetchV2EvidenceTests(unittest.TestCase):
             result = fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=target)
             self.assertTrue(target.is_dir())
             self.assertEqual(result["verification"]["overall_status"], "PASS")
-            self.assertEqual([name for name, _ in client.calls[:5]], ["backtest", "orders", "trades", "list", "download"])
+            self.assertEqual([name for name, _ in client.calls[:6]], ["backtest", "orders", "trades", "list", "list", "download"])
+            prefix = fixture["backtest"]["backtest"]["runtimeStatistics"]["V2_EVIDENCE_PREFIX"]
+            self.assertEqual([value for name, value in client.calls if name == "list"], [prefix, prefix + "/capability", prefix + "/evidence"])
             key_map = json.loads((target / "key-map.json").read_text())
+            list_records = json.loads((target / "object-lists.json").read_text())
+            self.assertEqual(set(list_records), {"root", "capability", "evidence"})
+            self.assertTrue(all(record["object_storage_used"] == fixture["object_list"]["object_storage_used"] and isinstance(record["listed_paths"], list) for record in list_records.values()))
             downloaded_keys = [value for name, value in client.calls if name == "download"]
             self.assertEqual(key_map, {key: f"objects/{index:04d}.bin" for index, key in enumerate(downloaded_keys, 1)})
             archived_text = "\n".join(path.read_text(errors="ignore") for path in target.glob("*.json"))
             self.assertNotIn("secret-value", archived_text)
-            self.assertEqual(verifier_cli.verify_archive(verifier_cli.load_archive(target)), result["verification"])
+            self.assertEqual(fetcher._safe_value({"user": "alice", "url": "https://example.invalid/plain"}), {"user": "alice", "url": "https://example.invalid/plain"})
+            self.assertEqual(verifier_cli.verify_archive(verifier_cli.load_archive(target), expected_identity={"project_id": 123, "backtest_id": "bt", "organization_id": "org"}), result["verification"])
 
     def test_existing_target_causes_zero_api_calls(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -71,6 +84,29 @@ class FetchV2EvidenceTests(unittest.TestCase):
             with self.assertRaises(fetcher.FetchV2EvidenceError):
                 fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=target)
             self.assertEqual(client.calls, [])
+
+    def test_atomic_publish_never_clobbers_a_racing_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "capability"
+            original = fetcher._rename_noreplace
+            def race(source, destination):
+                destination.mkdir()
+                (destination / "owner.txt").write_text("other writer")
+                return original(source, destination)
+            with mock.patch.object(fetcher, "_rename_noreplace", side_effect=race):
+                with self.assertRaises(fetcher.FetchV2EvidenceError):
+                    fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=target)
+            self.assertEqual((target / "owner.txt").read_text(), "other writer")
+
+    def test_archive_reader_rejects_hardlinks_and_extra_object_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            key_map = json.loads((archive / "key-map.json").read_text())
+            target = archive / next(iter(key_map.values()))
+            os.link(target, archive / "objects" / "extra.bin")
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
 
     def test_api_or_verification_failure_cleans_temporary_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -81,16 +117,29 @@ class FetchV2EvidenceTests(unittest.TestCase):
             self.assertFalse((parent / "capability").exists())
             self.assertEqual(list(parent.iterdir()), [])
 
+    def test_disk_corruption_before_publish_is_rejected_and_cleaned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            original = fetcher._write_json
+            def corrupt(path, value):
+                original(path, value)
+                if path.name == "fetch-manifest.json":
+                    path.write_text("{invalid", encoding="utf-8")
+            with mock.patch.object(fetcher, "_write_json", side_effect=corrupt), self.assertRaises(fetcher.FetchV2EvidenceError):
+                fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=parent / "capability")
+            self.assertEqual(list(parent.iterdir()), [])
+
     def test_verifier_cli_exit_and_output_policy(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "capability"
             fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
             output = archive / "verification.json"
             self.assertFalse(output.exists())
-            with mock.patch("sys.argv", ["verify_v2_evidence.py", "--archive", str(archive), "--output", str(output)]):
+            command = ["verify_v2_evidence.py", "--archive", str(archive), "--output", str(output), "--expected-project-id", "123", "--expected-backtest-id", "bt", "--expected-organization-id", "org"]
+            with mock.patch("sys.argv", command):
                 self.assertEqual(verifier_cli.main(), 0)
             self.assertEqual(json.loads(output.read_text())["overall_status"], "PASS")
-            with mock.patch("sys.argv", ["verify_v2_evidence.py", "--archive", str(archive), "--output", str(output)]):
+            with mock.patch("sys.argv", command):
                 self.assertEqual(verifier_cli.main(), 1)
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory); archive = archive_fixture(); archive["orders"] = [{"id": 1}]

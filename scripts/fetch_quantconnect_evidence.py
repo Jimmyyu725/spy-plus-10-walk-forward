@@ -30,8 +30,12 @@ class QuantConnectApiError(RuntimeError):
 
 
 class _UrllibResponse:
-    def __init__(self, response):
-        self.content = response.read()
+    def __init__(self, response, *, max_bytes: int | None = None):
+        # Read one byte past the caller's limit.  Object downloads are untrusted
+        # signed-URL responses and must not be buffered without a bound.
+        self.content = response.read() if max_bytes is None else response.read(max_bytes + 1)
+        if max_bytes is not None and len(self.content) > max_bytes:
+            raise OSError("HTTP response exceeds safe size limit")
         self.status = getattr(response, "status", 200)
 
     def raise_for_status(self):
@@ -53,9 +57,9 @@ class _UrllibSession:
         )
         return _UrllibResponse(request.urlopen(outgoing, timeout=timeout))
 
-    def get(self, url, *, timeout: int):
+    def get(self, url, *, timeout: int, max_bytes: int | None = None):
         outgoing = request.Request(url, method="GET")
-        return _UrllibResponse(request.urlopen(outgoing, timeout=timeout))
+        return _UrllibResponse(request.urlopen(outgoing, timeout=timeout), max_bytes=max_bytes)
 
 
 def load_credentials(path: Path) -> tuple[str, str]:
@@ -228,7 +232,18 @@ class QuantConnectClient:
                 return {"objects": objects, "object_storage_used": used}
             page += 1
 
-    def download_object(self, organization_id: str, key: str) -> bytes:
+    def download_object(
+        self,
+        organization_id: str,
+        key: str,
+        *,
+        max_transport_bytes: int | None = None,
+        max_uncompressed_bytes: int | None = None,
+    ) -> bytes:
+        if max_transport_bytes is not None and (type(max_transport_bytes) is not int or max_transport_bytes < 1):
+            raise QuantConnectApiError("Object Store download size limit is invalid")
+        if max_uncompressed_bytes is not None and (type(max_uncompressed_bytes) is not int or max_uncompressed_bytes < 1):
+            raise QuantConnectApiError("Object Store decompression size limit is invalid")
         result = self._post_json(
             "object/get",
             {"organizationId": str(organization_id), "keys": [str(key)]},
@@ -249,18 +264,31 @@ class QuantConnectClient:
                 self._sleep(1)
         if not url:
             raise QuantConnectApiError("Object Store download did not become ready")
-        response = self._session.get(str(url), timeout=60)
+        try:
+            response = self._session.get(str(url), timeout=60, max_bytes=max_transport_bytes)
+        except TypeError:  # Existing injected v1 sessions deliberately have the old signature.
+            response = self._session.get(str(url), timeout=60)
         try:
             response.raise_for_status()
         except OSError as error:
             raise QuantConnectApiError("Object Store file download failed") from error
         content = response.content
+        if max_transport_bytes is not None and len(content) > max_transport_bytes:
+            raise QuantConnectApiError("Object Store transport exceeds safe size limit")
         if content.startswith(b"PK"):
-            with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                files = [name for name in archive.namelist() if not name.endswith("/")]
-                if len(files) != 1:
-                    raise QuantConnectApiError("Object Store archive is ambiguous")
-                content = archive.read(files[0])
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                    files = [entry for entry in archive.infolist() if not entry.is_dir()]
+                    if len(files) != 1:
+                        raise QuantConnectApiError("Object Store archive is ambiguous")
+                    entry = files[0]
+                    if max_uncompressed_bytes is not None and entry.file_size > max_uncompressed_bytes:
+                        raise QuantConnectApiError("Object Store archive exceeds safe size limit")
+                    content = archive.read(entry)
+            except (OSError, zipfile.BadZipFile) as error:
+                raise QuantConnectApiError("Object Store archive is invalid") from error
+        if max_uncompressed_bytes is not None and len(content) > max_uncompressed_bytes:
+            raise QuantConnectApiError("Object Store content exceeds safe size limit")
         return content
 
 

@@ -56,6 +56,16 @@ class FetchQuantConnectEvidenceTests(unittest.TestCase):
         self.assertEqual(result, b"\x1f\x8bcompressed")
         session.get.assert_called_once()
 
+    def test_object_download_rejects_transport_larger_than_caller_bound(self):
+        session = Mock()
+        response = Mock(content=b"oversized")
+        response.raise_for_status = Mock()
+        session.get.return_value = response
+        client = QuantConnectClient("123", "secret", session=session)
+        client._post_json = Mock(return_value={"success": True, "url": "https://download.invalid/file"})
+        with self.assertRaises(QuantConnectApiError):
+            client.download_object("org", "evidence-key", max_transport_bytes=4, max_uncompressed_bytes=4)
+
     def test_loading_backtest_rows_are_polled_before_pagination(self):
         sleep = Mock()
         client = QuantConnectClient("123", "secret", session=Mock(), sleep=sleep)

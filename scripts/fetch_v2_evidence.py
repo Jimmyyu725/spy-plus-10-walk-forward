@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -23,25 +25,43 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from fetch_quantconnect_evidence import QuantConnectApiError, QuantConnectClient, load_credentials
+from spy_plus_10.v2.evidence import MAX_CHUNK_BYTES
 from spy_plus_10.v2.verifier import decode_manifest, extract_runtime_statistics, verify_archive
+from verify_v2_evidence import load_archive
 
 
 class FetchV2EvidenceError(RuntimeError):
     """Raised when a v2 archive cannot be completely downloaded and verified."""
 
 
-_SENSITIVE = ("authorization", "token", "secret", "credential", "signed", "url", "user")
-_SENSITIVE_VALUE = re.compile(r"(?i)(?:authorization\s*[:=]|(?:api[-_ ]?token|token|secret|credential|password)\s*[:=]|https?://\S+(?:[?&](?:sig|signature|token|key)=))")
+_SENSITIVE = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie", "token", "api-token", "api_token", "password", "secret", "credentials"})
+_SENSITIVE_VALUE = re.compile(r"(?i)(?:\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]+=*|\b(?:cookie|token|password|secret)\s*[:=]|[?&](?:x-amz-(?:signature|credential|security-token)|signature|sig|token|password|api[-_]?key)=[^&\s]+)")
+_MAX_TRANSPORT_BYTES = len("base64-gzip:") + 4 * ((MAX_CHUNK_BYTES + 2) // 3)
 
 
 def _safe_value(value):
     if isinstance(value, dict):
-        return {str(key): _safe_value(item) for key, item in value.items() if not any(marker in str(key).lower() for marker in _SENSITIVE)}
+        return {str(key): ("[REDACTED]" if type(key) is str and key.lower() in _SENSITIVE else _safe_value(item)) for key, item in value.items()}
     if isinstance(value, list):
         return [_safe_value(item) for item in value]
     if isinstance(value, str) and _SENSITIVE_VALUE.search(value):
         return "[REDACTED]"
     return value
+
+
+def _rename_noreplace(source: Path, target: Path) -> None:
+    """Atomically publish a directory only when the target name is absent."""
+    try:
+        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    except (AttributeError, OSError) as error:  # Linux is an explicit deployment contract.
+        raise FetchV2EvidenceError("atomic non-overwrite publish is unavailable") from error
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    if renameat2(-100, os.fsencode(source), -100, os.fsencode(target), 1) != 0:  # RENAME_NOREPLACE
+        error_number = ctypes.get_errno()
+        if error_number == errno.EEXIST:
+            raise FetchV2EvidenceError("output directory already exists")
+        raise FetchV2EvidenceError("atomic evidence publish failed") from OSError(error_number, os.strerror(error_number))
 
 
 def _write_json(path: Path, value) -> None:
@@ -91,10 +111,14 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         runtime = extract_runtime_statistics(backtest)
         if runtime["status"] != "PASS":
             raise FetchV2EvidenceError("v2 runtime statistics are invalid")
-        object_list = client.list_objects(organization_id, runtime["prefix"])
-        if not isinstance(object_list, dict) or not isinstance(object_list.get("objects"), list):
+        root_list = client.list_objects(organization_id, runtime["prefix"])
+        capability_list = client.list_objects(organization_id, runtime["prefix"] + "/capability")
+        if not all(isinstance(value, dict) and isinstance(value.get("objects"), list) for value in (root_list, capability_list)):
             raise FetchV2EvidenceError("Object Store listing is invalid")
-        listed = {item.get("key") for item in object_list["objects"] if isinstance(item, dict)}
+        used = [value.get("object_storage_used") for value in (root_list, capability_list)]
+        if any(value != used[0] for value in used[1:]):
+            raise FetchV2EvidenceError("Object Store storage-used values disagree")
+        listed_items = {item.get("key"): item for listing in (root_list, capability_list) for item in listing["objects"] if isinstance(item, dict) and type(item.get("key")) is str}
         keys = [runtime["string_key"]]
         if runtime["transport"] == "bytes":
             keys.append(runtime["bytes_key"])
@@ -103,10 +127,15 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
 
         def download(key: str):
             _prefix_bound(key, runtime["prefix"])
-            if key not in listed:
+            item = listed_items.get(key)
+            if item is None or item.get("folder") is not False:
                 raise FetchV2EvidenceError("required object is absent from Object Store listing")
             if key not in downloaded:
-                value = client.download_object(organization_id, key)
+                try:
+                    value = client.download_object(organization_id, key, max_transport_bytes=_MAX_TRANSPORT_BYTES,
+                                                   max_uncompressed_bytes=_MAX_TRANSPORT_BYTES)
+                except TypeError:  # Test doubles and legacy caller-owned clients retain the v1 method shape.
+                    value = client.download_object(organization_id, key)
                 _storage_bytes(value)
                 downloaded[key] = value
             return downloaded[key]
@@ -116,15 +145,27 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         manifest = decode_manifest(downloaded[runtime["manifest_key"]])
         if manifest["status"] != "PASS" or manifest["transport"] != runtime["transport"]:
             raise FetchV2EvidenceError("v2 manifest is invalid or transport-mismatched")
+        evidence_list = client.list_objects(organization_id, runtime["prefix"] + "/evidence")
+        if not isinstance(evidence_list, dict) or not isinstance(evidence_list.get("objects"), list) or evidence_list.get("object_storage_used") != used[0]:
+            raise FetchV2EvidenceError("Object Store evidence listing is invalid")
+        for item in evidence_list["objects"]:
+            if isinstance(item, dict) and type(item.get("key")) is str:
+                listed_items[item["key"]] = item
+        object_list = {"objects": [*root_list["objects"], *capability_list["objects"], *evidence_list["objects"]], "object_storage_used": used[0]}
+        object_lists = {
+            "root": {"path": runtime["prefix"], "listed_paths": [item.get("key") for item in root_list["objects"] if isinstance(item, dict)], **root_list},
+            "capability": {"path": runtime["prefix"] + "/capability", "listed_paths": [item.get("key") for item in capability_list["objects"] if isinstance(item, dict)], **capability_list},
+            "evidence": {"path": runtime["prefix"] + "/evidence", "listed_paths": [item.get("key") for item in evidence_list["objects"] if isinstance(item, dict)], **evidence_list},
+        }
         for descriptor in manifest["chunks"]:
             key = _prefix_bound(descriptor["key"], runtime["prefix"])
             download(key)
-        archive = {"backtest": _safe_value(backtest), "object_list": _safe_value(object_list),
+        archive = {"backtest": _safe_value(backtest), "object_list": _safe_value(object_list), "object_lists": _safe_value(object_lists),
                    "orders": _safe_value(orders), "trades": _safe_value(trades), "objects": downloaded}
         archive["fetch_manifest"] = _fetch_manifest(project_id=project_id, backtest_id=backtest_id,
                                                       organization_id=organization_id, algorithm_id=manifest["algorithm_id"],
                                                       orders=archive["orders"], trades=archive["trades"], objects=downloaded)
-        verification = verify_archive(archive)
+        verification = verify_archive(archive, expected_identity={"project_id": int(project_id), "backtest_id": str(backtest_id), "organization_id": str(organization_id)})
         if verification["overall_status"] not in {"PASS", "PASS_WITH_STRING_FALLBACK"}:
             raise FetchV2EvidenceError("downloaded v2 archive failed independent verification")
         objects_dir = temporary / "objects"
@@ -141,12 +182,16 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         _write_jsonl(temporary / "orders.jsonl", archive["orders"])
         _write_jsonl(temporary / "trades.jsonl", archive["trades"])
         _write_json(temporary / "object-list.json", archive["object_list"])
+        _write_json(temporary / "object-lists.json", archive["object_lists"])
         _write_json(temporary / "key-map.json", key_map)
         if object_records != archive["fetch_manifest"]["objects"]:
             raise FetchV2EvidenceError("archive object manifest drifted before publish")
         _write_json(temporary / "fetch-manifest.json", archive["fetch_manifest"])
-        os.replace(temporary, output_dir)
-        return {"verification": verification, "fetch_manifest": {"object_count": len(object_records), "order_count": len(orders), "trade_count": len(trades)}}
+        disk_verification = verify_archive(load_archive(temporary), expected_identity={"project_id": int(project_id), "backtest_id": str(backtest_id), "organization_id": str(organization_id)})
+        if disk_verification["overall_status"] not in {"PASS", "PASS_WITH_STRING_FALLBACK"}:
+            raise FetchV2EvidenceError("written v2 archive failed independent verification")
+        _rename_noreplace(temporary, output_dir)
+        return {"verification": disk_verification, "fetch_manifest": {"object_count": len(object_records), "order_count": len(orders), "trade_count": len(trades)}}
     except (FetchV2EvidenceError, QuantConnectApiError):
         raise
     except Exception as error:
