@@ -329,6 +329,54 @@ class V2CloudSyncTests(unittest.TestCase):
         self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS")
         self.assertEqual(algorithm.statistics["V2_TRANSPORT"], "bytes")
 
+    def test_cloud_main_defers_empty_algorithm_id_until_engine_sets_it_on_end(self):
+        store = FakeObjectStore()
+        with self.load_cloud_main(store) as algorithm:
+            algorithm.algorithm_id = ""
+
+            algorithm.initialize()
+
+            self.assertEqual(store.writes, [])
+            self.assertEqual(algorithm._status, {
+                "string": "UNVERIFIED", "bytes": "UNVERIFIED",
+                "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+            })
+            algorithm.algorithm_id = ALGORITHM
+            algorithm.on_end_of_algorithm()
+
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS")
+        self.assertEqual(len(store.writes), 4)
+
+    def test_cloud_main_empty_algorithm_id_on_end_fails_closed_without_writes(self):
+        store = FakeObjectStore()
+        with self.load_cloud_main(store) as algorithm:
+            algorithm.algorithm_id = ""
+            algorithm.initialize()
+
+            with self.assertRaisesRegex(Exception, "invalid algorithm_id"):
+                algorithm.on_end_of_algorithm()
+
+        self.assertEqual(store.writes, [])
+        self.assertEqual(algorithm._status, {
+            "string": "UNVERIFIED", "bytes": "UNVERIFIED",
+            "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+        })
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
+
+    def test_cloud_main_on_end_runs_capability_smoke_once(self):
+        store = FakeObjectStore()
+        with self.load_cloud_main(store) as algorithm:
+            algorithm.initialize()
+            algorithm.on_end_of_algorithm()
+            writes_after_first_end = list(store.writes)
+            statistics_after_first_end = dict(algorithm.statistics)
+
+            with self.assertRaisesRegex(RuntimeError, "CAPABILITY_SMOKE_ALREADY_FINALIZED"):
+                algorithm.on_end_of_algorithm()
+
+        self.assertEqual(store.writes, writes_after_first_end)
+        self.assertEqual(algorithm.statistics, statistics_after_first_end)
+
     def test_cloud_main_expected_bytes_failure_uses_string_fallback(self):
         store = FakeObjectStore(false_suffix="capability/bytes-1kb.bin")
         with self.load_cloud_main(store) as algorithm:
@@ -360,9 +408,9 @@ class V2CloudSyncTests(unittest.TestCase):
     def test_cloud_main_type_error_does_not_fallback(self):
         store = FakeObjectStore(type_error_suffix="capability/bytes-1kb.bin")
         with self.load_cloud_main(store) as algorithm:
+            algorithm.initialize()
             with self.assertRaisesRegex(TypeError, "binding error"):
-                algorithm.initialize()
-            algorithm.on_end_of_algorithm()
+                algorithm.on_end_of_algorithm()
 
         self.assertEqual(algorithm._status, {
             "string": "PASS", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
@@ -375,9 +423,9 @@ class V2CloudSyncTests(unittest.TestCase):
         manifest_key = build_manifest_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM)
         store.values[manifest_key] = "already present"
         with self.load_cloud_main(store) as algorithm:
+            algorithm.initialize()
             with self.assertRaisesRegex(RuntimeError, "OBJECT_STORE_KEY_EXISTS"):
-                algorithm.initialize()
-            algorithm.on_end_of_algorithm()
+                algorithm.on_end_of_algorithm()
 
         self.assertEqual(store.writes, [])
         self.assertEqual(algorithm._status, {
@@ -399,9 +447,9 @@ class V2CloudSyncTests(unittest.TestCase):
         )
         for label, store, expected_status in cases:
             with self.subTest(label=label), self.load_cloud_main(store) as algorithm:
+                algorithm.initialize()
                 with self.assertRaises(RuntimeError):
-                    algorithm.initialize()
-                algorithm.on_end_of_algorithm()
+                    algorithm.on_end_of_algorithm()
                 self.assertEqual(algorithm._status, expected_status)
                 self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
 
@@ -420,9 +468,9 @@ class V2CloudSyncTests(unittest.TestCase):
         for label, suffix, expected_status in cases:
             store = FakeObjectStore(write_then_false_suffix=suffix)
             with self.subTest(label=label), self.load_cloud_main(store) as algorithm:
+                algorithm.initialize()
                 with self.assertRaises(RuntimeError):
-                    algorithm.initialize()
-                algorithm.on_end_of_algorithm()
+                    algorithm.on_end_of_algorithm()
                 self.assertEqual(algorithm._status, expected_status)
                 self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
                 self.assertTrue(any(key.endswith(suffix) for _, key in store.writes))

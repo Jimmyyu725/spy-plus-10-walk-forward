@@ -1,3 +1,4 @@
+import ast
 import json
 import subprocess
 import sys
@@ -66,9 +67,38 @@ class V2FoundationTests(unittest.TestCase):
         self.assertFalse(status.live_trading)
 
     def test_exact_main_contract_is_the_final_capability_algorithm(self):
+        tree = ast.parse(EXPECTED_MAIN_SOURCE)
+        algorithm = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "SpyPlusTenV2EvidenceCapability"
+        )
+        initialize = next(
+            node for node in algorithm.body
+            if isinstance(node, ast.FunctionDef) and node.name == "initialize"
+        )
+        on_end = next(
+            node for node in algorithm.body
+            if isinstance(node, ast.FunctionDef) and node.name == "on_end_of_algorithm"
+        )
+        initialize_attributes = {
+            node.attr for node in ast.walk(initialize)
+            if isinstance(node, ast.Attribute)
+        }
+        source_lines = EXPECTED_MAIN_SOURCE.splitlines()
+        on_end_source = "\n".join(source_lines[on_end.lineno - 1:on_end.end_lineno])
+
         self.assertIn("def _run_capability_smoke", EXPECTED_MAIN_SOURCE)
         self.assertIn("SYNTHETIC_CAPABILITY_FIXTURE", EXPECTED_MAIN_SOURCE)
         self.assertIn("for key in all_keys:", EXPECTED_MAIN_SOURCE)
+        self.assertNotIn("_run_capability_smoke", initialize_attributes)
+        self.assertNotIn("algorithm_id", initialize_attributes)
+        self.assertNotIn("project_id", initialize_attributes)
+        self.assertLess(
+            on_end_source.index("self._run_capability_smoke()"),
+            on_end_source.index("self.set_runtime_statistic"),
+        )
+        self.assertIn("CAPABILITY_SMOKE_ALREADY_FINALIZED", on_end_source)
         self.assertLess(
             EXPECTED_MAIN_SOURCE.index("encoded = encode_chunk(payload)"),
             EXPECTED_MAIN_SOURCE.index("descriptor = chunk_descriptor("),

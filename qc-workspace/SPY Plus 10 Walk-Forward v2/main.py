@@ -25,15 +25,13 @@ class SpyPlusTenV2EvidenceCapability(QCAlgorithm):
         self.set_cash(1_000_000)
         self._git_commit = self.get_parameter("v2_git_commit")
         self._run_label = self.get_parameter("evidence_run_label")
-        self._algorithm = str(self.algorithm_id)
-        self._project = str(self.project_id)
         self._status = {
             "string": "UNVERIFIED",
             "bytes": "UNVERIFIED",
             "chunk": "UNVERIFIED",
             "manifest": "UNVERIFIED",
         }
-        self._run_capability_smoke()
+        self._on_end_finalized = False
 
     def _save_unique_string(self, key: str, value: str) -> None:
         if self.object_store.contains_key(key):
@@ -200,18 +198,26 @@ class SpyPlusTenV2EvidenceCapability(QCAlgorithm):
         self.set_runtime_statistic("V2_TRANSPORT", transport)
 
     def on_end_of_algorithm(self) -> None:
-        required = (
-            self._status["string"],
-            self._status["chunk"],
-            self._status["manifest"],
-        )
-        overall = "UNVERIFIED"
-        if all(value == "PASS" for value in required):
-            overall = (
-                "PASS"
-                if self._status["bytes"] == "PASS"
-                else "PASS_WITH_STRING_FALLBACK"
+        if self._on_end_finalized:
+            raise RuntimeError("CAPABILITY_SMOKE_ALREADY_FINALIZED")
+        self._on_end_finalized = True
+        try:
+            self._algorithm = str(self.algorithm_id)
+            self._project = str(self.project_id)
+            self._run_capability_smoke()
+        finally:
+            required = (
+                self._status["string"],
+                self._status["chunk"],
+                self._status["manifest"],
             )
-        self.set_runtime_statistic("V2_CAPABILITY_STATUS", overall)
-        for key, value in self._status.items():
-            self.set_runtime_statistic(f"V2_{key.upper()}_STATUS", value)
+            overall = "UNVERIFIED"
+            if all(value == "PASS" for value in required):
+                overall = (
+                    "PASS"
+                    if self._status["bytes"] == "PASS"
+                    else "PASS_WITH_STRING_FALLBACK"
+                )
+            self.set_runtime_statistic("V2_CAPABILITY_STATUS", overall)
+            for key, value in self._status.items():
+                self.set_runtime_statistic(f"V2_{key.upper()}_STATUS", value)
