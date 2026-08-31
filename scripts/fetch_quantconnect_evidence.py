@@ -23,6 +23,9 @@ from spy_plus_10.frozen_evaluation import extract_cloud_statistics
 BASE_URL = "https://www.quantconnect.com/api/v2"
 MAX_BACKTEST_ROW_PAGES = 1000
 MAX_OBJECT_LIST_PAGES = 1000
+MAX_API_JSON_BYTES = 8 * 1024 * 1024
+MAX_OBJECT_LIST_PAGE_OBJECTS = 1000
+MAX_OBJECT_LIST_OBJECTS = 10_000
 
 
 class QuantConnectApiError(RuntimeError):
@@ -55,7 +58,7 @@ class _UrllibSession:
             headers={**headers, "Content-Type": "application/json"},
             method="POST",
         )
-        return _UrllibResponse(request.urlopen(outgoing, timeout=timeout))
+        return _UrllibResponse(request.urlopen(outgoing, timeout=timeout), max_bytes=MAX_API_JSON_BYTES)
 
     def get(self, url, *, timeout: int, max_bytes: int | None = None):
         outgoing = request.Request(url, method="GET")
@@ -127,6 +130,8 @@ class QuantConnectClient:
                 raise QuantConnectApiError(f"QuantConnect {field} response is invalid")
             page = result.get(field)
             if isinstance(page, list):
+                if len(page) > 99:
+                    raise QuantConnectApiError(f"QuantConnect {field} response exceeds page limit")
                 return page
             if result.get("status") == "loading":
                 if attempt < 29:
@@ -203,6 +208,7 @@ class QuantConnectClient:
                 or isinstance(response_total_pages, bool)
                 or not isinstance(values, list)
                 or any(not isinstance(value, dict) for value in values)
+                or len(values) > MAX_OBJECT_LIST_PAGE_OBJECTS
             ):
                 raise QuantConnectApiError("Object Store list response is invalid")
             if "objectStorageUsed" in result:
@@ -227,6 +233,8 @@ class QuantConnectClient:
                 total_pages = response_total_pages
             elif response_total_pages != total_pages:
                 raise QuantConnectApiError("Object Store list pagination changed")
+            if len(objects) + len(values) > MAX_OBJECT_LIST_OBJECTS:
+                raise QuantConnectApiError("Object Store list exceeds safe object limit")
             objects.extend(values)
             if page == total_pages:
                 return {"objects": objects, "object_storage_used": used}

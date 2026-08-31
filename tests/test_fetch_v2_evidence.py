@@ -110,6 +110,19 @@ class FetchV2EvidenceTests(unittest.TestCase):
                 fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=Path(directory) / "capability")
             self.assertNotIn("download", [name for name, _ in client.calls])
 
+    def test_fallback_download_allows_but_does_not_fetch_residual_bytes_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = archive_fixture(fallback=True)
+            runtime = fixture["backtest"]["backtest"]["runtimeStatistics"]
+            residual = {"key": runtime["V2_BYTES_KEY"], "size": 1024, "folder": False}
+            fixture["object_lists"]["capability"]["objects"].append(residual)
+            fixture["object_lists"]["capability"]["listed_paths"].append(residual["key"])
+            fixture["object_list"]["objects"].insert(-1, residual)
+            client = FakeClient(fixture)
+            result = fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=Path(directory) / "capability")
+            self.assertEqual(result["verification"]["overall_status"], "PASS_WITH_STRING_FALLBACK")
+            self.assertNotIn(runtime["V2_BYTES_KEY"], [key for name, key in client.calls if name == "download"])
+
     def test_atomic_publish_never_clobbers_a_racing_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "capability"
@@ -259,6 +272,27 @@ class FetchV2EvidenceTests(unittest.TestCase):
                 self.assertLessEqual(loads.call_count, verifier_cli.MAX_ARCHIVE_OBJECTS)
             finally:
                 os.close(descriptor)
+
+    def test_overlong_json_integers_are_archive_errors_and_cli_writes_unverified(self):
+        huge_integer = "9" * 5_000
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            (archive / "key-map.json").write_text('{"number":' + huge_integer + "}", encoding="utf-8")
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
+            output = Path(directory) / "integer-verification.json"
+            command = ["verify_v2_evidence.py", "--archive", str(archive), "--output", str(output), "--expected-project-id", "123", "--expected-backtest-id", "bt", "--expected-organization-id", "org"]
+            with mock.patch("sys.argv", command):
+                self.assertEqual(verifier_cli.main(), 1)
+            self.assertEqual(json.loads(output.read_text())["overall_status"], "UNVERIFIED")
+        for filename in ("orders.jsonl", "trades.jsonl"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                archive = Path(directory) / "capability"
+                fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+                (archive / filename).write_text(huge_integer + "\n", encoding="utf-8")
+                with self.assertRaises(verifier_cli.ArchiveReadError):
+                    verifier_cli.load_archive(archive)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "rows.jsonl").write_text("\n \n\"[{}]\"\n\n0\n", encoding="utf-8")

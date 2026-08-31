@@ -332,7 +332,8 @@ def _validate_object_lists(value: object, aggregate: object, runtime: Mapping, m
         capability_expected = {runtime["string_key"]: False}
         if runtime["transport"] == "bytes":
             capability_expected[runtime["bytes_key"]] = False
-        if set(metadata["capability"]) != set(capability_expected) or any(metadata["capability"].get(key, {}).get("folder") is not folder for key, folder in capability_expected.items()):
+        capability_allowed = {**capability_expected, **({runtime["bytes_key"]: False} if runtime["transport"] != "bytes" else {})}
+        if not set(capability_expected).issubset(metadata["capability"]) or not set(metadata["capability"]).issubset(capability_allowed) or any(metadata["capability"].get(key, {}).get("folder") is not folder for key, folder in capability_allowed.items() if key in metadata["capability"]):
             _add_error(errors, "OBJECT_LISTS_CAPABILITY_PLACEMENT_INVALID")
         if manifest is not None:
             evidence_expected = {descriptor["key"]: False for descriptor in manifest["chunks"]}

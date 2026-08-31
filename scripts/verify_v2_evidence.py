@@ -118,7 +118,7 @@ def _read_json(directory_fd: int, name: str, maximum: int = MAX_JSON_BYTES):
         text = _read_bytes(directory_fd, name, maximum).decode("utf-8")
         _scan_json_structure(text)
         return json.loads(text, object_pairs_hook=_no_duplicate_object)
-    except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
+    except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSON is invalid") from error
 
 
@@ -133,7 +133,7 @@ def _read_jsonl(directory_fd: int, name: str) -> list:
                 raise ArchiveReadError("archive JSONL has too many rows")
             tokens = _scan_json_structure(line, used_tokens=tokens + 1)
             rows.append(json.loads(line, object_pairs_hook=_no_duplicate_object))
-    except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
+    except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSONL is invalid") from error
     return rows
 

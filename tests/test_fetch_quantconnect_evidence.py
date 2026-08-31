@@ -6,14 +6,25 @@ from unittest.mock import Mock
 
 from scripts.fetch_quantconnect_evidence import (
     MAX_BACKTEST_ROW_PAGES,
+    MAX_API_JSON_BYTES,
+    MAX_OBJECT_LIST_OBJECTS,
     MAX_OBJECT_LIST_PAGES,
+    MAX_OBJECT_LIST_PAGE_OBJECTS,
     QuantConnectApiError,
     QuantConnectClient,
+    _UrllibResponse,
     load_credentials,
 )
 
 
 class FetchQuantConnectEvidenceTests(unittest.TestCase):
+    def test_urllib_json_response_reads_at_most_the_bounded_limit(self):
+        response = Mock()
+        response.read.return_value = b"x" * (MAX_API_JSON_BYTES + 1)
+        with self.assertRaises(OSError):
+            _UrllibResponse(response, max_bytes=MAX_API_JSON_BYTES)
+        response.read.assert_called_once_with(MAX_API_JSON_BYTES + 1)
+
     def test_credentials_are_loaded_without_becoming_request_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "credentials"
@@ -39,6 +50,21 @@ class FetchQuantConnectEvidenceTests(unittest.TestCase):
         self.assertEqual(len(rows), 100)
         self.assertEqual(client._post_json.call_count, 2)
         self.assertEqual(client._post_json.call_args_list[1].args[1]["start"], 99)
+
+    def test_row_and_object_list_responses_have_bounded_page_and_total_sizes(self):
+        client = QuantConnectClient("123", "secret", session=Mock())
+        client._post_json = Mock(return_value={"success": True, "orders": [{"id": index} for index in range(100)]})
+        with self.assertRaises(QuantConnectApiError):
+            client.read_all_backtest_rows("backtests/orders/read", "orders", 1, "bt")
+        client = QuantConnectClient("123", "secret", session=Mock())
+        client._post_json = Mock(return_value={"success": True, "page": 1, "totalPages": 1, "objects": [{"key": str(index)} for index in range(MAX_OBJECT_LIST_PAGE_OBJECTS + 1)]})
+        with self.assertRaises(QuantConnectApiError):
+            client.list_objects("org", "prefix")
+        client = QuantConnectClient("123", "secret", session=Mock())
+        pages = [{"success": True, "page": page, "totalPages": 11, "objects": [{"key": f"{page}-{index}"} for index in range(MAX_OBJECT_LIST_PAGE_OBJECTS)]} for page in range(1, 12)]
+        client._post_json = Mock(side_effect=pages)
+        with self.assertRaises(QuantConnectApiError):
+            client.list_objects("org", "prefix")
 
     def test_object_download_job_uses_returned_url(self):
         session = Mock()

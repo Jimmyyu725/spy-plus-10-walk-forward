@@ -112,6 +112,20 @@ class V2VerifierTests(unittest.TestCase):
         self.assertEqual(result["overall_status"], "PASS_WITH_STRING_FALLBACK")
         self.assertEqual(result["object_store"]["bytes_round_trip"], "FAIL")
 
+    def test_string_fallback_allows_only_an_optional_residual_bytes_listing(self):
+        archive = archive_fixture(fallback=True)
+        runtime = archive["backtest"]["backtest"]["runtimeStatistics"]
+        residual = {"key": runtime["V2_BYTES_KEY"], "size": 1024, "folder": False}
+        archive["object_lists"]["capability"]["objects"].append(residual)
+        archive["object_lists"]["capability"]["listed_paths"].append(residual["key"])
+        archive["object_list"]["objects"].insert(-1, residual)
+        self.assertEqual(verify_archive(archive)["overall_status"], "PASS_WITH_STRING_FALLBACK")
+        extra = copy.deepcopy(archive)
+        extra["object_lists"]["capability"]["objects"].append({"key": "unexpected", "size": 1, "folder": False})
+        extra["object_lists"]["capability"]["listed_paths"].append("unexpected")
+        extra["object_list"]["objects"].insert(-1, extra["object_lists"]["capability"]["objects"][-1])
+        self.assertEqual(verify_archive(extra)["overall_status"], "UNVERIFIED")
+
     def test_string_transport_downloaded_as_bytes_and_metadata_size_must_match(self):
         archive = archive_fixture(fallback=True)
         chunk_key = next(key for key in archive["objects"] if key.endswith(".json.gz"))

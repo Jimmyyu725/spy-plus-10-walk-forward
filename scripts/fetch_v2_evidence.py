@@ -110,7 +110,7 @@ def _fetch_manifest(*, project_id: int, backtest_id: str, organization_id: str, 
             "downloaded_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "objects": records}
 
 
-def _require_direct_files(listing: object, expected: dict[str, bool]) -> None:
+def _require_direct_files(listing: object, expected: dict[str, bool], optional: dict[str, bool] | None = None) -> None:
     """Reject flattened Object Store replies before downloading any raw object."""
     if not isinstance(listing, dict) or not isinstance(listing.get("objects"), list):
         raise FetchV2EvidenceError("Object Store listing is invalid")
@@ -118,7 +118,8 @@ def _require_direct_files(listing: object, expected: dict[str, bool]) -> None:
     if any(not isinstance(item, dict) or type(item.get("key")) is not str or type(item.get("size")) is not int or item["size"] < 0 or type(item.get("folder")) is not bool for item in entries):
         raise FetchV2EvidenceError("Object Store listing metadata is invalid")
     actual = {item["key"]: item for item in entries}
-    if len(actual) != len(entries) or set(actual) != set(expected) or any(actual[key]["folder"] is not folder for key, folder in expected.items()):
+    allowed = {**expected, **(optional or {})}
+    if len(actual) != len(entries) or not set(expected).issubset(actual) or not set(actual).issubset(allowed) or any(actual[key]["folder"] is not folder for key, folder in allowed.items() if key in actual):
         raise FetchV2EvidenceError("Object Store listing has invalid direct placement")
 
 
@@ -148,7 +149,8 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         known_capability = {runtime["string_key"]: False}
         if runtime["transport"] == "bytes":
             known_capability[runtime["bytes_key"]] = False
-        _require_direct_files(capability_list, known_capability)
+        _require_direct_files(capability_list, known_capability,
+                              {runtime["bytes_key"]: False} if runtime["transport"] != "bytes" else None)
         listed_items = {item.get("key"): item for listing in (root_list, capability_list) for item in listing["objects"] if isinstance(item, dict) and type(item.get("key")) is str}
         keys = [runtime["string_key"]]
         if runtime["transport"] == "bytes":
