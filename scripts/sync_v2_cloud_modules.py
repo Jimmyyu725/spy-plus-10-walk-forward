@@ -78,7 +78,7 @@ def sync_modules(*, source: Path = SOURCE, target: Path = TARGET) -> tuple[str, 
             raise RuntimeError(f"cannot read cloud v2 target: {destination}") from error
 
     staged = {}
-    replaced = []
+    restore_required = []
     try:
         for name in MODULES:
             original_content, original_mode = originals[name]
@@ -86,12 +86,12 @@ def sync_modules(*, source: Path = SOURCE, target: Path = TARGET) -> tuple[str, 
             staged[name] = _stage_file(target, name, contents[name], mode)
         for name in MODULES:
             temporary = staged[name]
+            restore_required.append(name)
             os.replace(temporary, target / name)
             staged.pop(name)
-            replaced.append(name)
     except BaseException as error:
         restore_errors = []
-        for name in reversed(replaced):
+        for name in reversed(restore_required):
             try:
                 _restore_target(target, name, originals[name])
             except BaseException as restore_error:

@@ -277,6 +277,46 @@ class V2CloudSyncTests(unittest.TestCase):
                 self.assertEqual((target / "attribution.py").read_bytes(), b"old attribution\n")
                 self.assertEqual(list(target.glob(".*.sync.tmp")), [])
 
+    def test_sync_post_replace_base_exception_restores_previously_unrecorded_target(self):
+        from scripts import sync_v2_cloud_modules
+
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            for target_existed in (True, False):
+                with self.subTest(
+                    exception_type=exception_type.__name__, target_existed=target_existed
+                ), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    source = root / "source"
+                    target = root / "target"
+                    source.mkdir()
+                    target.mkdir()
+                    (source / "evidence.py").write_bytes(b"new evidence\n")
+                    (source / "attribution.py").write_bytes(b"new attribution\n")
+                    evidence_target = target / "evidence.py"
+                    if target_existed:
+                        evidence_target.write_bytes(b"old evidence\n")
+                    real_replace = os.replace
+                    interrupt = exception_type("stop after replacement")
+
+                    def replace_then_interrupt(source_path, target_path):
+                        result = real_replace(source_path, target_path)
+                        if Path(target_path) == evidence_target:
+                            raise interrupt
+                        return result
+
+                    with mock.patch.object(
+                        sync_v2_cloud_modules.os, "replace", side_effect=replace_then_interrupt
+                    ):
+                        with self.assertRaises(exception_type) as caught:
+                            sync_v2_cloud_modules.sync_modules(source=source, target=target)
+                    self.assertIs(caught.exception, interrupt)
+                    if target_existed:
+                        self.assertEqual(evidence_target.read_bytes(), b"old evidence\n")
+                    else:
+                        self.assertFalse(evidence_target.exists())
+                    self.assertFalse((target / "attribution.py").exists())
+                    self.assertEqual(list(target.glob(".*.sync.tmp")), [])
+
     def test_cloud_main_success_records_pass_statuses(self):
         store = FakeObjectStore()
         with self.load_cloud_main(store) as algorithm:
