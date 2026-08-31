@@ -21,6 +21,8 @@ from spy_plus_10.v2.verifier import MAX_ARCHIVE_OBJECTS, verify_archive
 
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
+MAX_JSON_DEPTH = 128
+MAX_JSON_STRUCTURAL_TOKENS = 100_000
 MAX_TOTAL_OBJECT_BYTES = 64 * 1024 * 1024
 _OBJECT_PATH = re.compile(r"^objects/[0-9]{4}\.bin$")
 MAX_STRING_TRANSPORT_BYTES = len("base64-gzip:") + 4 * ((MAX_CHUNK_BYTES + 2) // 3)
@@ -74,9 +76,47 @@ def _no_duplicate_object(pairs):
     return result
 
 
+def _scan_json_structure(text: str, *, used_tokens: int = 0) -> int:
+    """Bound nesting/nodes linearly, without mistaking quoted punctuation for syntax."""
+    if type(text) is not str:
+        raise ArchiveReadError("archive JSON text is invalid")
+    depth = 0
+    in_string = False
+    escaped = False
+    tokens = used_tokens
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1; tokens += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ArchiveReadError("archive JSON nesting exceeds limit")
+        elif character in "]}":
+            depth -= 1; tokens += 1
+            if depth < 0:
+                raise ArchiveReadError("archive JSON structure is invalid")
+        elif character in ":,":
+            tokens += 1
+        if tokens > MAX_JSON_STRUCTURAL_TOKENS:
+            raise ArchiveReadError("archive JSON structure exceeds limit")
+    if in_string or escaped or depth != 0:
+        raise ArchiveReadError("archive JSON structure is invalid")
+    return tokens
+
+
 def _read_json(directory_fd: int, name: str, maximum: int = MAX_JSON_BYTES):
     try:
-        return json.loads(_read_bytes(directory_fd, name, maximum).decode("utf-8"), object_pairs_hook=_no_duplicate_object)
+        text = _read_bytes(directory_fd, name, maximum).decode("utf-8")
+        _scan_json_structure(text)
+        return json.loads(text, object_pairs_hook=_no_duplicate_object)
     except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSON is invalid") from error
 
@@ -84,7 +124,11 @@ def _read_json(directory_fd: int, name: str, maximum: int = MAX_JSON_BYTES):
 def _read_jsonl(directory_fd: int, name: str) -> list:
     try:
         raw = _read_bytes(directory_fd, name, MAX_JSON_BYTES)
-        rows = [json.loads(line, object_pairs_hook=_no_duplicate_object) for line in raw.decode("utf-8").splitlines() if line]
+        tokens, rows = 0, []
+        for line in raw.decode("utf-8").splitlines():
+            if line:
+                tokens = _scan_json_structure(line, used_tokens=tokens)
+                rows.append(json.loads(line, object_pairs_hook=_no_duplicate_object))
     except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSONL is invalid") from error
     if len(rows) > MAX_ARCHIVE_OBJECTS:

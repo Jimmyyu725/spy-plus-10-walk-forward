@@ -68,7 +68,7 @@ class FetchV2EvidenceTests(unittest.TestCase):
             target = Path(directory) / "capability"
             fixture = archive_fixture()
             fixture["backtest"]["message"] = "Authorization: Bearer secret-value https://example.invalid/file?sig=secret-value"
-            fixture["backtest"]["metadata"] = {"access-token": "structured-secret", "user": "alice", "url": "https://example.invalid/plain"}
+            fixture["backtest"]["metadata"] = {"access-token": "structured-secret", "clientSecret": "camel-secret", "user": "alice", "url": "https://example.invalid/plain"}
             client = FakeClient(fixture)
             result = fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=target)
             self.assertTrue(target.is_dir())
@@ -85,6 +85,7 @@ class FetchV2EvidenceTests(unittest.TestCase):
             archived_text = "\n".join(path.read_text(errors="ignore") for path in target.glob("*.json"))
             self.assertNotIn("secret-value", archived_text)
             self.assertNotIn("structured-secret", archived_text)
+            self.assertNotIn("camel-secret", archived_text)
             self.assertIn("https://example.invalid/plain", archived_text)
             self.assertEqual(fetcher._safe_value({"user": "alice", "url": "https://example.invalid/plain"}), {"user": "alice", "url": "https://example.invalid/plain"})
             self.assertEqual(verifier_cli.verify_archive(verifier_cli.load_archive(target), expected_identity={"project_id": 123, "backtest_id": "bt", "organization_id": "org"}), result["verification"])
@@ -224,7 +225,7 @@ class FetchV2EvidenceTests(unittest.TestCase):
                 verifier_cli.load_archive(archive)
 
     def test_structured_credential_keys_are_redacted_without_breaking_object_records(self):
-        values = {"access-token": "a", "refresh token": "b", "client_secret": "c", "vendor_token": "d", "vendor secret": "e", "db_password": "f", "cloud_credentials": "g", "authorization": "h", "cookie": "i", "user": "alice", "url": "https://host.invalid/plain"}
+        values = {"access-token": "a", "refresh token": "b", "client_secret": "c", "accessToken": "d", "refreshToken": "e", "clientSecret": "f", "apiToken": "g", "authToken": "h", "privateKey": "i", "apiKey": "j", "accessKey": "k", "secretKey": "l", "vendor_token": "m", "vendor secret": "n", "db_password": "o", "cloud_credentials": "p", "authorization": "q", "cookie": "r", "user": "alice", "url": "https://host.invalid/plain"}
         cleaned = fetcher._safe_value(values)
         self.assertTrue(all(cleaned[key] == "[REDACTED]" for key in values if key not in {"user", "url"}))
         self.assertEqual(cleaned["user"], "alice")
@@ -232,6 +233,13 @@ class FetchV2EvidenceTests(unittest.TestCase):
         record = {"key": "evidence/object", "bytes": 1, "sha256": "hash", "access_token": "secret"}
         self.assertEqual(fetcher._safe_value(record)["key"], "evidence/object")
         self.assertEqual(fetcher._safe_value(record)["access_token"], "[REDACTED]")
+
+    def test_json_structure_scanner_ignores_quoted_brackets_and_bounds_nodes(self):
+        self.assertLess(verifier_cli._scan_json_structure(json.dumps({"note": '[{}]\\" still text'})), verifier_cli.MAX_JSON_STRUCTURAL_TOKENS)
+        with self.assertRaises(verifier_cli.ArchiveReadError):
+            verifier_cli._scan_json_structure("[" * (verifier_cli.MAX_JSON_DEPTH + 1) + "]" * (verifier_cli.MAX_JSON_DEPTH + 1))
+        with self.assertRaises(verifier_cli.ArchiveReadError):
+            verifier_cli._scan_json_structure("[" + "0," * verifier_cli.MAX_JSON_STRUCTURAL_TOKENS + "0]")
 
 
 if __name__ == "__main__":
