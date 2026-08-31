@@ -101,6 +101,15 @@ def archive_fixture(*, fallback=False):
             "orders": [], "trades": [], "objects": objects, "fetch_manifest": fetch_manifest}
 
 
+def real_dual_statistics_fixture():
+    runtime = copy.deepcopy(archive_fixture()["backtest"]["backtest"]["runtimeStatistics"])
+    del runtime["V2_STRING_SHA256"]
+    del runtime["V2_BYTES_SHA256"]
+    runtime.update({f"engine statistic {index}": "0" for index in range(8)})
+    statistics = {f"summary statistic {index}": "0" for index in range(27)}
+    return {"statistics": statistics, "runtimeStatistics": runtime}
+
+
 class V2VerifierTests(unittest.TestCase):
     def test_bytes_archive_passes_with_json_serializable_result(self):
         result = verify_archive(archive_fixture())
@@ -213,6 +222,31 @@ class V2VerifierTests(unittest.TestCase):
             for response in ({key: statistics}, {"backtest": {key: statistics}}):
                 with self.subTest(key=key, response=response):
                     self.assertEqual(extract_runtime_statistics(response)["status"], "PASS")
+
+    def test_runtime_extraction_selects_complete_v2_statistics_mapping(self):
+        real = real_dual_statistics_fixture()
+        self.assertEqual(len(real["statistics"]), 27)
+        self.assertFalse(any(key.startswith("V2_") for key in real["statistics"]))
+        self.assertEqual(len(real["runtimeStatistics"]), 18)
+        self.assertEqual(sum(key.startswith("V2_") for key in real["runtimeStatistics"]), 10)
+        self.assertEqual(extract_runtime_statistics(real)["status"], "PASS")
+
+        runtime_only = {"runtimeStatistics": copy.deepcopy(real["runtimeStatistics"])}
+        self.assertEqual(extract_runtime_statistics(runtime_only)["status"], "PASS")
+        statistics_only = {"statistics": copy.deepcopy(real["runtimeStatistics"])}
+        self.assertEqual(extract_runtime_statistics(statistics_only)["status"], "PASS")
+
+        both = copy.deepcopy(real)
+        alternate = copy.deepcopy(real["runtimeStatistics"])
+        original_prefix = alternate["V2_EVIDENCE_PREFIX"]
+        alternate_prefix = "alternate/v2/evidence"
+        for field in ("V2_EVIDENCE_PREFIX", "V2_STRING_KEY", "V2_BYTES_KEY", "V2_MANIFEST_KEY"):
+            alternate[field] = alternate[field].replace(original_prefix, alternate_prefix, 1)
+        both["statistics"] = alternate
+        self.assertEqual(extract_runtime_statistics(both)["prefix"], real["runtimeStatistics"]["V2_EVIDENCE_PREFIX"])
+
+        neither = {"runtimeStatistics": {"ordinary": "value"}, "statistics": {"summary": "value"}}
+        self.assertEqual(extract_runtime_statistics(neither)["errors"], ["RUNTIME_MISSING_FIELDS"])
 
     def test_ten_field_runtime_statistics_recompute_canonical_probe_hashes(self):
         archive = archive_fixture()

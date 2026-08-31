@@ -41,6 +41,7 @@ _RUNTIME_REQUIRED_FIELDS = frozenset({
     "V2_MANIFEST_STATUS",
 })
 _RUNTIME_SHA256_FIELDS = ("V2_STRING_SHA256", "V2_BYTES_SHA256")
+_RUNTIME_STATISTICS_KEYS = ("runtimeStatistics", "runtime_statistics", "statistics")
 _STATUSES = frozenset({"PASS", "PASS_WITH_STRING_FALLBACK", "UNVERIFIED"})
 
 
@@ -78,11 +79,15 @@ def _read_statistics(backtest: object) -> object:
     candidate = _unwrap_backtest(backtest)
     if not isinstance(candidate, Mapping):
         raise ValueError("backtest wrapper")
-    for key in ("statistics", "runtimeStatistics", "runtime_statistics"):
+    fallback = None
+    for key in _RUNTIME_STATISTICS_KEYS:
         value = candidate.get(key)
         if isinstance(value, Mapping):
-            return value
-    return None
+            if fallback is None:
+                fallback = value
+            if _RUNTIME_REQUIRED_FIELDS.issubset(value):
+                return value
+    return fallback
 
 
 def _unwrap_backtest(backtest: object) -> Mapping:
