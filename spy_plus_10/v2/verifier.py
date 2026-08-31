@@ -34,12 +34,13 @@ MAX_TOTAL_ARCHIVE_OBJECT_BYTES = 64 * 1024 * 1024
 MAX_DECIMAL_CHARS = 256
 MAX_DECIMAL_DIGITS = 128
 MAX_DECIMAL_EXPONENT = 128
-_RUNTIME_FIELDS = frozenset({
+_RUNTIME_REQUIRED_FIELDS = frozenset({
     "V2_CAPABILITY_STATUS", "V2_TRANSPORT", "V2_EVIDENCE_PREFIX",
     "V2_STRING_KEY", "V2_BYTES_KEY", "V2_MANIFEST_KEY",
-    "V2_STRING_SHA256", "V2_BYTES_SHA256", "V2_STRING_STATUS",
-    "V2_BYTES_STATUS", "V2_CHUNK_STATUS", "V2_MANIFEST_STATUS",
+    "V2_STRING_STATUS", "V2_BYTES_STATUS", "V2_CHUNK_STATUS",
+    "V2_MANIFEST_STATUS",
 })
+_RUNTIME_SHA256_FIELDS = frozenset({"V2_STRING_SHA256", "V2_BYTES_SHA256"})
 _STATUSES = frozenset({"PASS", "PASS_WITH_STRING_FALLBACK", "UNVERIFIED"})
 
 
@@ -108,9 +109,9 @@ def extract_runtime_statistics(backtest) -> dict:
     """Return checked v2 runtime fields without propagating raw backtest data."""
     try:
         statistics = _read_statistics(backtest)
-        if not isinstance(statistics, Mapping) or not _RUNTIME_FIELDS.issubset(statistics):
+        if not isinstance(statistics, Mapping) or not _RUNTIME_REQUIRED_FIELDS.issubset(statistics):
             return _result("UNVERIFIED", "RUNTIME_MISSING_FIELDS")
-        values = {field: statistics[field] for field in _RUNTIME_FIELDS}
+        values = {field: statistics[field] for field in _RUNTIME_REQUIRED_FIELDS}
         if any(type(value) is not str or not value for value in values.values()):
             return _result("UNVERIFIED", "RUNTIME_FIELD_INVALID")
         capability = values["V2_CAPABILITY_STATUS"]
@@ -120,13 +121,20 @@ def extract_runtime_statistics(backtest) -> dict:
         for field in ("V2_STRING_STATUS", "V2_BYTES_STATUS", "V2_CHUNK_STATUS", "V2_MANIFEST_STATUS"):
             if values[field] not in {"PASS", "FAIL", "UNVERIFIED"}:
                 return _result("UNVERIFIED", "RUNTIME_COMPONENT_STATUS_INVALID")
-        for field in ("V2_STRING_SHA256", "V2_BYTES_SHA256"):
+        expected_hashes = {
+            "V2_STRING_SHA256": sha256_b64(b"S" * 1024),
+            "V2_BYTES_SHA256": sha256_b64(bytes(index % 251 for index in range(1024))),
+        }
+        for field in _RUNTIME_SHA256_FIELDS & statistics.keys():
+            value = statistics[field]
             try:
-                digest = base64.b64decode(values[field], validate=True)
+                digest = base64.b64decode(value, validate=True)
             except (ValueError, TypeError):
                 return _result("UNVERIFIED", "RUNTIME_SHA256_INVALID")
-            if len(digest) != 32 or base64.b64encode(digest).decode("ascii") != values[field]:
+            if type(value) is not str or len(digest) != 32 or base64.b64encode(digest).decode("ascii") != value:
                 return _result("UNVERIFIED", "RUNTIME_SHA256_INVALID")
+            if value != expected_hashes[field]:
+                return _result("UNVERIFIED", "RUNTIME_SHA256_MISMATCH")
         if capability == "PASS" and (transport != "bytes" or any(values[field] != "PASS" for field in ("V2_STRING_STATUS", "V2_BYTES_STATUS", "V2_CHUNK_STATUS", "V2_MANIFEST_STATUS"))):
             return _result("UNVERIFIED", "RUNTIME_PASS_INCONSISTENT")
         if capability == "PASS_WITH_STRING_FALLBACK" and (transport != "base64-gzip-string" or values["V2_STRING_STATUS"] != "PASS" or values["V2_BYTES_STATUS"] != "FAIL" or values["V2_CHUNK_STATUS"] != "PASS" or values["V2_MANIFEST_STATUS"] != "PASS"):
@@ -140,7 +148,7 @@ def extract_runtime_statistics(backtest) -> dict:
             return _result("UNVERIFIED", "RUNTIME_PREFIX_MISMATCH")
         return _result("PASS", capability_status=capability, transport=transport, prefix=prefix,
                        string_key=string_key, bytes_key=bytes_key, manifest_key=manifest_key,
-                       string_sha256=values["V2_STRING_SHA256"], bytes_sha256=values["V2_BYTES_SHA256"])
+                       string_sha256=expected_hashes["V2_STRING_SHA256"], bytes_sha256=expected_hashes["V2_BYTES_SHA256"])
     except Exception:
         return _result("UNVERIFIED", "RUNTIME_MALFORMED")
 

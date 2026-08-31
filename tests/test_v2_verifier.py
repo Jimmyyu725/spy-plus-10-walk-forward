@@ -211,6 +211,50 @@ class V2VerifierTests(unittest.TestCase):
                 with self.subTest(key=key, response=response):
                     self.assertEqual(extract_runtime_statistics(response)["status"], "PASS")
 
+    def test_ten_field_runtime_statistics_recompute_canonical_probe_hashes(self):
+        archive = archive_fixture()
+        statistics = archive["backtest"]["backtest"]["runtimeStatistics"]
+        del statistics["V2_STRING_SHA256"]
+        del statistics["V2_BYTES_SHA256"]
+        runtime = extract_runtime_statistics(archive["backtest"])
+        self.assertEqual(runtime["status"], "PASS")
+        self.assertEqual(runtime["string_sha256"], sha256_b64(b"S" * 1024))
+        self.assertEqual(runtime["bytes_sha256"], sha256_b64(bytes(index % 251 for index in range(1024))))
+        self.assertEqual(verify_archive(archive)["overall_status"], "PASS")
+
+        fallback = archive_fixture(fallback=True)
+        fallback_statistics = fallback["backtest"]["backtest"]["runtimeStatistics"]
+        del fallback_statistics["V2_STRING_SHA256"]
+        del fallback_statistics["V2_BYTES_SHA256"]
+        self.assertEqual(verify_archive(fallback)["overall_status"], "PASS_WITH_STRING_FALLBACK")
+
+    def test_runtime_optional_hashes_must_match_canonical_probes(self):
+        correct = archive_fixture()["backtest"]
+        self.assertEqual(extract_runtime_statistics(correct)["status"], "PASS")
+        for updates, code in (
+            ({"V2_STRING_SHA256": sha256_b64(b"wrong")}, "RUNTIME_SHA256_MISMATCH"),
+            ({"V2_BYTES_SHA256": sha256_b64(b"wrong")}, "RUNTIME_SHA256_MISMATCH"),
+            ({"V2_STRING_SHA256": sha256_b64(b"wrong"), "V2_BYTES_SHA256": sha256_b64(b"wrong")}, "RUNTIME_SHA256_MISMATCH"),
+            ({"V2_STRING_SHA256": "not-base64"}, "RUNTIME_SHA256_INVALID"),
+            ({"V2_BYTES_SHA256": sha256_b64(bytes(index % 251 for index in range(1024))) + "\n"}, "RUNTIME_SHA256_INVALID"),
+        ):
+            with self.subTest(updates=updates):
+                response = copy.deepcopy(correct)
+                response["backtest"]["runtimeStatistics"].update(updates)
+                result = extract_runtime_statistics(response)
+                self.assertEqual(result["status"], "UNVERIFIED")
+                self.assertEqual(result["errors"], [code])
+
+    def test_runtime_requires_each_non_hash_field(self):
+        statistics = archive_fixture()["backtest"]["backtest"]["runtimeStatistics"]
+        for field in tuple(statistics):
+            if field.endswith("SHA256"):
+                continue
+            with self.subTest(field=field):
+                response = {"runtimeStatistics": copy.deepcopy(statistics)}
+                del response["runtimeStatistics"][field]
+                self.assertEqual(extract_runtime_statistics(response)["errors"], ["RUNTIME_MISSING_FIELDS"])
+
     def test_recomputed_cumulative_pnl_must_equal_each_declared_sleeve_total(self):
         daily = [daily_row("2015-01-02"), daily_row("2015-01-05")]
         daily[1]["sleeves"]["equity"]["cumulative_pnl"] = "1"
