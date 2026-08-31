@@ -21,6 +21,7 @@ from spy_plus_10.frozen_evaluation import extract_cloud_statistics
 
 
 BASE_URL = "https://www.quantconnect.com/api/v2"
+MAX_OBJECT_LIST_PAGES = 1000
 
 
 class QuantConnectApiError(RuntimeError):
@@ -162,7 +163,11 @@ class QuantConnectClient:
         page = 1
         total_pages = None
         used = None
+        request_count = 0
         while True:
+            if request_count >= MAX_OBJECT_LIST_PAGES:
+                raise QuantConnectApiError("Object Store list exceeded safe page limit")
+            request_count += 1
             result = self._post_json(
                 "object/list",
                 {
@@ -179,18 +184,12 @@ class QuantConnectClient:
             if (
                 not isinstance(response_page, int)
                 or isinstance(response_page, bool)
-                or response_page != page
                 or not isinstance(response_total_pages, int)
                 or isinstance(response_total_pages, bool)
-                or response_total_pages < page
                 or not isinstance(values, list)
                 or any(not isinstance(value, dict) for value in values)
             ):
                 raise QuantConnectApiError("Object Store list response is invalid")
-            if total_pages is None:
-                total_pages = response_total_pages
-            elif response_total_pages != total_pages:
-                raise QuantConnectApiError("Object Store list pagination changed")
             if "objectStorageUsed" in result:
                 response_used = result["objectStorageUsed"]
                 if (
@@ -200,6 +199,19 @@ class QuantConnectClient:
                 ):
                     raise QuantConnectApiError("Object Store list response is invalid")
                 used = response_used
+            if total_pages is None and response_page == 0 and response_total_pages == 0:
+                return {"objects": values, "object_storage_used": used}
+            if (
+                response_page != page
+                or response_total_pages < 1
+                or response_total_pages < page
+                or response_total_pages > MAX_OBJECT_LIST_PAGES
+            ):
+                raise QuantConnectApiError("Object Store list response is invalid")
+            if total_pages is None:
+                total_pages = response_total_pages
+            elif response_total_pages != total_pages:
+                raise QuantConnectApiError("Object Store list pagination changed")
             objects.extend(values)
             if page == total_pages:
                 return {"objects": objects, "object_storage_used": used}

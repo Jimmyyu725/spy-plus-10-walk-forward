@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from scripts.fetch_quantconnect_evidence import (
+    MAX_OBJECT_LIST_PAGES,
     QuantConnectApiError,
     QuantConnectClient,
     load_credentials,
@@ -147,13 +148,35 @@ class FetchQuantConnectEvidenceTests(unittest.TestCase):
             ],
         )
 
+    def test_object_list_accepts_a_zero_page_terminal_response_with_objects(self):
+        client = QuantConnectClient("123", "secret", session=Mock())
+        client._post_json = Mock(
+            return_value={
+                "success": True,
+                "page": 0,
+                "totalPages": 0,
+                "objects": [{"key": "pre-existing"}],
+                "objectStorageUsed": 2048,
+            }
+        )
+
+        result = client.list_objects("org", "path")
+
+        self.assertEqual(result, {"objects": [{"key": "pre-existing"}], "object_storage_used": 2048})
+        client._post_json.assert_called_once_with(
+            "object/list", {"organizationId": "org", "path": "path", "page": 1}
+        )
+
     def test_object_list_rejects_malicious_or_malformed_pagination(self):
         cases = [
             {"page": True, "totalPages": 1, "objects": []},
+            {"page": 0, "totalPages": 1, "objects": []},
             {"page": 2, "totalPages": 2, "objects": []},
             {"page": 1, "totalPages": True, "objects": []},
             {"page": 1, "totalPages": "2", "objects": []},
             {"page": 1, "totalPages": 0, "objects": []},
+            {"page": -1, "totalPages": 1, "objects": []},
+            {"page": 1, "totalPages": -1, "objects": []},
         ]
         for response in cases:
             with self.subTest(response=response):
@@ -161,6 +184,43 @@ class FetchQuantConnectEvidenceTests(unittest.TestCase):
                 client._post_json = Mock(return_value={"success": True, **response})
                 with self.assertRaises(QuantConnectApiError):
                     client.list_objects("org", "path")
+
+    def test_object_list_rejects_page_counts_above_the_hard_limit(self):
+        for total_pages in [MAX_OBJECT_LIST_PAGES + 1, 10**100]:
+            with self.subTest(total_pages=total_pages):
+                client = QuantConnectClient("123", "secret", session=Mock())
+                client._post_json = Mock(
+                    return_value={
+                        "success": True,
+                        "page": 1,
+                        "totalPages": total_pages,
+                        "objects": [],
+                    }
+                )
+
+                with self.assertRaises(QuantConnectApiError):
+                    client.list_objects("org", "path")
+
+                client._post_json.assert_called_once()
+
+    def test_object_list_allows_exactly_the_hard_page_limit(self):
+        client = QuantConnectClient("123", "secret", session=Mock())
+
+        def object_page(_endpoint, payload):
+            page = payload["page"]
+            return {
+                "success": True,
+                "page": page,
+                "totalPages": MAX_OBJECT_LIST_PAGES,
+                "objects": [{"key": "last"}] if page == MAX_OBJECT_LIST_PAGES else [],
+            }
+
+        client._post_json = Mock(side_effect=object_page)
+
+        result = client.list_objects("org", "path")
+
+        self.assertEqual(result, {"objects": [{"key": "last"}], "object_storage_used": None})
+        self.assertEqual(client._post_json.call_count, MAX_OBJECT_LIST_PAGES)
 
     def test_object_list_rejects_total_pages_that_change_mid_stream(self):
         client = QuantConnectClient("123", "secret", session=Mock())
