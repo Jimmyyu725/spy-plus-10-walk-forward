@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import unittest
+import zlib
 from decimal import Decimal
 
 from spy_plus_10.v2.evidence import (
@@ -167,6 +168,7 @@ class V2EvidenceTests(unittest.TestCase):
         encoded = encode_chunk(payload)
         key = build_chunk_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, 2015)
         descriptor = chunk_descriptor(2015, key, encoded, payload["daily"])
+        self.assertEqual(descriptor["run_variant"], "full")
         manifest = build_manifest(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, "full", "bytes", [descriptor])
         self.assertEqual(
             manifest,
@@ -228,6 +230,8 @@ class V2EvidenceTests(unittest.TestCase):
             build_manifest(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, "full", "invalid", [descriptor])
         with self.assertRaises(EvidenceError):
             build_manifest(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, "full", [], [descriptor])
+        with self.assertRaises(EvidenceError):
+            build_manifest(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, "core_only", "bytes", [descriptor])
 
     def test_chunk_rejects_strict_dates_and_cross_year_rows(self):
         bad_payloads = []
@@ -325,6 +329,18 @@ class V2EvidenceTests(unittest.TestCase):
             with self.subTest(year=year, candidate=candidate[:10]):
                 with self.assertRaises(EvidenceError):
                     chunk_descriptor(year, key, candidate, daily)
+
+    def test_descriptor_wraps_real_corrupt_deflate_as_evidence_error(self):
+        payload = valid_payload()
+        encoded = encode_chunk(payload)
+        corrupted = bytearray(encoded)
+        corrupted[10] ^= 0xFF
+        key = build_chunk_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, 2015)
+
+        with self.assertRaises(zlib.error):
+            gzip.decompress(corrupted)
+        with self.assertRaises(EvidenceError):
+            chunk_descriptor(2015, key, bytes(corrupted), payload["daily"])
 
     def test_validate_chunk_rejects_non_json_native_values_before_encode(self):
         payload = valid_payload()

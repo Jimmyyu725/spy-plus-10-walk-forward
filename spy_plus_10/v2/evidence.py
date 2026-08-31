@@ -3,6 +3,8 @@
 Persist a verified annual chunk only in this order: ``encode_chunk(payload)``,
 ``chunk_descriptor(year, key, encoded, payload["daily"])``, then
 ``build_manifest(...)``. Object-store writes occur only after those local gates.
+Descriptors carry the decoded chunk ``run_variant`` so manifests cannot relabel
+annual evidence from a different run variant.
 """
 
 import base64
@@ -12,6 +14,7 @@ import hashlib
 import io
 import json
 import re
+import zlib
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Mapping
@@ -76,7 +79,9 @@ _GATE_COUNTERS = (
     "future_data",
 )
 _GATE_FIELDS = frozenset({"data_license", "failures", *_GATE_COUNTERS})
-_DESCRIPTOR_FIELDS = frozenset({"year", "key", "encoded_bytes", "sha256", "first_date", "last_date", "rows"})
+_DESCRIPTOR_FIELDS = frozenset(
+    {"year", "run_variant", "key", "encoded_bytes", "sha256", "first_date", "last_date", "rows"}
+)
 
 
 class EvidenceError(RuntimeError):
@@ -357,7 +362,7 @@ def _decode_canonical_chunk(encoded: bytes) -> dict:
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(encoded), mode="rb") as compressed:
             raw = compressed.read(_MAX_RAW_CHUNK_BYTES + 1)
-    except (OSError, EOFError) as error:
+    except (OSError, EOFError, zlib.error) as error:
         raise EvidenceError(f"invalid gzip chunk: {error}") from error
     if len(raw) > _MAX_RAW_CHUNK_BYTES:
         _fail("gzip chunk exceeds raw size limit")
@@ -388,6 +393,7 @@ def chunk_descriptor(year: object, key: object, encoded: object, daily: object) 
         _fail("chunk descriptor daily dates must be strictly increasing")
     return {
         "year": chunk_year,
+        "run_variant": payload["run_variant"],
         "key": key,
         "encoded_bytes": len(compressed),
         "sha256": sha256_b64(compressed),
@@ -403,10 +409,12 @@ def _validate_sha256(value: object) -> None:
         _fail("descriptor sha256 invalid")
 
 
-def _validate_descriptor(descriptor: object, project_id: str, commit: str, run_label: str, algorithm_id: str) -> dict:
+def _validate_descriptor(descriptor: object, project_id: str, commit: str, run_label: str, algorithm_id: str, run_variant: str) -> dict:
     item = _require_mapping(descriptor, "chunk descriptor")
     _require_fields(item, _DESCRIPTOR_FIELDS, "chunk descriptor", exact=True)
     year = _validate_year(item["year"], "descriptor year")
+    if type(item["run_variant"]) is not str or item["run_variant"] != run_variant:
+        _fail("descriptor run_variant does not match manifest")
     expected_key = build_chunk_key(project_id, commit, run_label, algorithm_id, year)
     if type(item["key"]) is not str or item["key"] != expected_key:
         _fail("descriptor key does not match manifest identity")
@@ -433,7 +441,10 @@ def build_manifest(project_id: object, commit: object, run_label: object, algori
         _fail("manifest transport invalid")
     if type(chunks) is not list or not chunks:
         _fail("manifest chunks must be a non-empty list")
-    validated = [_validate_descriptor(item, project, frozen_commit, label, algorithm) for item in chunks]
+    validated = [
+        _validate_descriptor(item, project, frozen_commit, label, algorithm, run_variant)
+        for item in chunks
+    ]
     years = [item["year"] for item in validated]
     keys = [item["key"] for item in validated]
     if len(years) != len(set(years)) or len(keys) != len(set(keys)):
