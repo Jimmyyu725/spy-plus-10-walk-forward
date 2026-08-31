@@ -23,12 +23,24 @@ ALGORITHM = "algorithm"
 
 
 class FakeObjectStore:
-    def __init__(self, *, false_suffix=None, type_error_suffix=None, mismatch_suffix=None):
+    def __init__(
+        self,
+        *,
+        false_suffix=None,
+        write_then_false_suffix=None,
+        type_error_suffix=None,
+        mismatch_suffix=None,
+        not_implemented_save_suffix=None,
+        not_implemented_read_suffix=None,
+    ):
         self.values = {}
         self.writes = []
         self.false_suffix = false_suffix
+        self.write_then_false_suffix = write_then_false_suffix
         self.type_error_suffix = type_error_suffix
         self.mismatch_suffix = mismatch_suffix
+        self.not_implemented_save_suffix = not_implemented_save_suffix
+        self.not_implemented_read_suffix = not_implemented_read_suffix
 
     def contains_key(self, key):
         return key in self.values
@@ -38,6 +50,8 @@ class FakeObjectStore:
         if key.endswith(self.false_suffix or "\0"):
             return False
         self.values[key] = value
+        if key.endswith(self.write_then_false_suffix or "\0"):
+            return False
         return True
 
     def read(self, key):
@@ -47,13 +61,19 @@ class FakeObjectStore:
         self.writes.append(("bytes", key))
         if key.endswith(self.type_error_suffix or "\0"):
             raise TypeError("unexpected Object Store binding error")
+        if key.endswith(self.not_implemented_save_suffix or "\0"):
+            raise NotImplementedError("bytes save unsupported")
         if key.endswith(self.false_suffix or "\0"):
             return False
         self.values[key] = bytes(value)
+        if key.endswith(self.write_then_false_suffix or "\0"):
+            return False
         return True
 
     def read_bytes(self, key):
         value = self.values[key]
+        if key.endswith(self.not_implemented_read_suffix or "\0"):
+            raise NotImplementedError("bytes read unsupported")
         if key.endswith(self.mismatch_suffix or "\0"):
             return b"mismatch"
         return value
@@ -148,6 +168,34 @@ class V2CloudSyncTests(unittest.TestCase):
             self.assertEqual((target / "evidence.py").read_bytes(), b"new evidence\n")
             self.assertEqual((target / "attribution.py").read_bytes(), b"new attribution\n")
 
+    def test_sync_preserves_existing_target_modes_and_uses_source_modes_for_new_targets(self):
+        from scripts.sync_v2_cloud_modules import sync_modules
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            existing_target = root / "existing-target"
+            new_target = root / "new-target"
+            source.mkdir()
+            existing_target.mkdir()
+            new_target.mkdir()
+            for name, mode in (("evidence.py", 0o640), ("attribution.py", 0o600)):
+                path = source / name
+                path.write_bytes(f"new {name}\n".encode())
+                path.chmod(mode)
+            for name, mode in (("evidence.py", 0o644), ("attribution.py", 0o640)):
+                path = existing_target / name
+                path.write_bytes(f"old {name}\n".encode())
+                path.chmod(mode)
+
+            sync_modules(source=source, target=existing_target)
+            sync_modules(source=source, target=new_target)
+
+            self.assertEqual((existing_target / "evidence.py").stat().st_mode & 0o777, 0o644)
+            self.assertEqual((existing_target / "attribution.py").stat().st_mode & 0o777, 0o640)
+            self.assertEqual((new_target / "evidence.py").stat().st_mode & 0o777, 0o640)
+            self.assertEqual((new_target / "attribution.py").stat().st_mode & 0o777, 0o600)
+
     def test_sync_preflight_missing_second_source_never_changes_temporary_target(self):
         from scripts.sync_v2_cloud_modules import sync_modules
 
@@ -197,6 +245,38 @@ class V2CloudSyncTests(unittest.TestCase):
             self.assertEqual((target / "attribution.py").read_bytes(), b"old attribution\n")
             self.assertEqual(list(target.glob(".*.sync.tmp")), [])
 
+    def test_sync_base_exception_restores_target_cleans_temps_and_reraises_same_interrupt(self):
+        from scripts import sync_v2_cloud_modules
+
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(exception_type=exception_type.__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source"
+                target = root / "target"
+                source.mkdir()
+                target.mkdir()
+                (source / "evidence.py").write_bytes(b"new evidence\n")
+                (source / "attribution.py").write_bytes(b"new attribution\n")
+                (target / "evidence.py").write_bytes(b"old evidence\n")
+                (target / "attribution.py").write_bytes(b"old attribution\n")
+                real_replace = os.replace
+                interrupt = exception_type("stop during replacement")
+
+                def interrupt_second_replace(source_path, target_path):
+                    if Path(target_path) == target / "attribution.py":
+                        raise interrupt
+                    return real_replace(source_path, target_path)
+
+                with mock.patch.object(
+                    sync_v2_cloud_modules.os, "replace", side_effect=interrupt_second_replace
+                ):
+                    with self.assertRaises(exception_type) as caught:
+                        sync_v2_cloud_modules.sync_modules(source=source, target=target)
+                self.assertIs(caught.exception, interrupt)
+                self.assertEqual((target / "evidence.py").read_bytes(), b"old evidence\n")
+                self.assertEqual((target / "attribution.py").read_bytes(), b"old attribution\n")
+                self.assertEqual(list(target.glob(".*.sync.tmp")), [])
+
     def test_cloud_main_success_records_pass_statuses(self):
         store = FakeObjectStore()
         with self.load_cloud_main(store) as algorithm:
@@ -220,6 +300,22 @@ class V2CloudSyncTests(unittest.TestCase):
         })
         self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS_WITH_STRING_FALLBACK")
         self.assertEqual(algorithm.statistics["V2_TRANSPORT"], "base64-gzip-string")
+
+    def test_cloud_main_bytes_save_and_read_not_implemented_are_legal_fallbacks(self):
+        cases = (
+            ("save", FakeObjectStore(not_implemented_save_suffix="capability/bytes-1kb.bin")),
+            ("read", FakeObjectStore(not_implemented_read_suffix="capability/bytes-1kb.bin")),
+        )
+        for label, store in cases:
+            with self.subTest(label=label), self.load_cloud_main(store) as algorithm:
+                algorithm.initialize()
+                algorithm.on_end_of_algorithm()
+                self.assertEqual(algorithm._status, {
+                    "string": "PASS", "bytes": "FAIL", "chunk": "PASS", "manifest": "PASS",
+                })
+                self.assertEqual(
+                    algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS_WITH_STRING_FALLBACK"
+                )
 
     def test_cloud_main_type_error_does_not_fallback(self):
         store = FakeObjectStore(type_error_suffix="capability/bytes-1kb.bin")
@@ -268,6 +364,29 @@ class V2CloudSyncTests(unittest.TestCase):
                 algorithm.on_end_of_algorithm()
                 self.assertEqual(algorithm._status, expected_status)
                 self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
+
+    def test_cloud_main_persisted_false_save_results_never_report_pass(self):
+        cases = (
+            ("string", "capability/string-1kb.txt", {
+                "string": "UNVERIFIED", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+            }),
+            ("chunk", "evidence/2015.json.gz", {
+                "string": "PASS", "bytes": "PASS", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+            }),
+            ("manifest", "manifest.json", {
+                "string": "PASS", "bytes": "PASS", "chunk": "PASS", "manifest": "UNVERIFIED",
+            }),
+        )
+        for label, suffix, expected_status in cases:
+            store = FakeObjectStore(write_then_false_suffix=suffix)
+            with self.subTest(label=label), self.load_cloud_main(store) as algorithm:
+                with self.assertRaises(RuntimeError):
+                    algorithm.initialize()
+                algorithm.on_end_of_algorithm()
+                self.assertEqual(algorithm._status, expected_status)
+                self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
+                self.assertTrue(any(key.endswith(suffix) for _, key in store.writes))
+                self.assertTrue(any(key.endswith(suffix) for key in store.values))
 
     def test_cloud_main_persisted_bytes_mismatch_falls_back_but_records_bytes_failure(self):
         store = FakeObjectStore(mismatch_suffix="capability/bytes-1kb.bin")

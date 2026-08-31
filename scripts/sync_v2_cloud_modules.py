@@ -12,28 +12,30 @@ TARGET = ROOT / "qc-workspace" / "SPY Plus 10 Walk-Forward v2"
 MODULES = ("evidence.py", "attribution.py")
 
 
-def _stage_file(target: Path, name: str, content: bytes) -> Path:
+def _stage_file(target: Path, name: str, content: bytes, mode: int) -> Path:
     descriptor, temporary_name = tempfile.mkstemp(
         dir=target, prefix=f".{name}.", suffix=".sync.tmp"
     )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
+            os.fchmod(handle.fileno(), mode)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception:
+    except BaseException:
         temporary.unlink(missing_ok=True)
         raise
     return temporary
 
 
-def _restore_target(target: Path, name: str, original: bytes | None) -> None:
+def _restore_target(target: Path, name: str, original: tuple[bytes | None, int | None]) -> None:
     destination = target / name
-    if original is None:
+    content, mode = original
+    if content is None:
         destination.unlink(missing_ok=True)
         return
-    temporary = _stage_file(target, name, original)
+    temporary = _stage_file(target, name, content, mode)
     try:
         os.replace(temporary, destination)
     finally:
@@ -55,6 +57,7 @@ def sync_modules(*, source: Path = SOURCE, target: Path = TARGET) -> tuple[str, 
         raise RuntimeError(f"canonical v2 module is missing: {missing[0]}")
     try:
         contents = {name: path.read_bytes() for name, path in source_paths.items()}
+        source_modes = {name: path.stat().st_mode & 0o777 for name, path in source_paths.items()}
     except OSError as error:
         raise RuntimeError("cannot read canonical v2 module") from error
 
@@ -64,7 +67,13 @@ def sync_modules(*, source: Path = SOURCE, target: Path = TARGET) -> tuple[str, 
         if destination.exists() and not destination.is_file():
             raise RuntimeError(f"cloud v2 target is not a file: {destination}")
         try:
-            originals[name] = destination.read_bytes() if destination.exists() else None
+            if destination.exists():
+                originals[name] = (
+                    destination.read_bytes(),
+                    destination.stat().st_mode & 0o777,
+                )
+            else:
+                originals[name] = (None, None)
         except OSError as error:
             raise RuntimeError(f"cannot read cloud v2 target: {destination}") from error
 
@@ -72,19 +81,23 @@ def sync_modules(*, source: Path = SOURCE, target: Path = TARGET) -> tuple[str, 
     replaced = []
     try:
         for name in MODULES:
-            staged[name] = _stage_file(target, name, contents[name])
+            original_content, original_mode = originals[name]
+            mode = original_mode if original_content is not None else source_modes[name]
+            staged[name] = _stage_file(target, name, contents[name], mode)
         for name in MODULES:
             temporary = staged[name]
             os.replace(temporary, target / name)
             staged.pop(name)
             replaced.append(name)
-    except Exception as error:
+    except BaseException as error:
         restore_errors = []
         for name in reversed(replaced):
             try:
                 _restore_target(target, name, originals[name])
-            except Exception as restore_error:
+            except BaseException as restore_error:
                 restore_errors.append(restore_error)
+        if not isinstance(error, Exception):
+            raise
         if restore_errors:
             raise RuntimeError("atomic sync failed and target restoration failed") from error
         raise RuntimeError("atomic sync failed") from error
