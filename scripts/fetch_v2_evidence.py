@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -65,6 +66,16 @@ def _prefix_bound(key: object, prefix: str) -> str:
     return key
 
 
+def _fetch_manifest(*, project_id: int, backtest_id: str, organization_id: str, algorithm_id: str, orders: list, trades: list, objects: dict[str, object]) -> dict:
+    records = []
+    for key, raw in objects.items():
+        value = _storage_bytes(raw)
+        records.append({"key": key, "bytes": len(value), "sha256": base64.b64encode(hashlib.sha256(value).digest()).decode("ascii")})
+    return {"project_id": int(project_id), "backtest_id": str(backtest_id), "organization_id": str(organization_id),
+            "algorithm_id": str(algorithm_id), "order_count": len(orders), "trade_count": len(trades),
+            "downloaded_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "objects": records}
+
+
 def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization_id: str, output_dir: Path) -> dict:
     """Fetch exactly one archive, validate it offline, then atomically publish it."""
     output_dir = Path(output_dir)
@@ -108,7 +119,11 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         for descriptor in manifest["chunks"]:
             key = _prefix_bound(descriptor["key"], runtime["prefix"])
             download(key)
-        archive = {"backtest": backtest, "object_list": object_list, "orders": orders, "trades": trades, "objects": downloaded}
+        archive = {"backtest": _safe_value(backtest), "object_list": _safe_value(object_list),
+                   "orders": _safe_value(orders), "trades": _safe_value(trades), "objects": downloaded}
+        archive["fetch_manifest"] = _fetch_manifest(project_id=project_id, backtest_id=backtest_id,
+                                                      organization_id=organization_id, algorithm_id=manifest["algorithm_id"],
+                                                      orders=archive["orders"], trades=archive["trades"], objects=downloaded)
         verification = verify_archive(archive)
         if verification["overall_status"] not in {"PASS", "PASS_WITH_STRING_FALLBACK"}:
             raise FetchV2EvidenceError("downloaded v2 archive failed independent verification")
@@ -121,17 +136,15 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
             value = _storage_bytes(raw)
             (temporary / relative).write_bytes(value)
             key_map[key] = relative
-            object_records.append({"key": key, "bytes": len(value), "sha256": __import__("base64").b64encode(hashlib.sha256(value).digest()).decode("ascii")})
-        _write_json(temporary / "backtest.json", backtest)
-        _write_jsonl(temporary / "orders.jsonl", orders)
-        _write_jsonl(temporary / "trades.jsonl", trades)
-        _write_json(temporary / "object-list.json", object_list)
+            object_records.append({"key": key, "bytes": len(value), "sha256": base64.b64encode(hashlib.sha256(value).digest()).decode("ascii")})
+        _write_json(temporary / "backtest.json", archive["backtest"])
+        _write_jsonl(temporary / "orders.jsonl", archive["orders"])
+        _write_jsonl(temporary / "trades.jsonl", archive["trades"])
+        _write_json(temporary / "object-list.json", archive["object_list"])
         _write_json(temporary / "key-map.json", key_map)
-        _write_json(temporary / "fetch-manifest.json", {
-            "project_id": int(project_id), "backtest_id": str(backtest_id), "organization_id": str(organization_id),
-            "algorithm_id": manifest["algorithm_id"], "order_count": len(orders), "trade_count": len(trades),
-            "downloaded_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "objects": object_records,
-        })
+        if object_records != archive["fetch_manifest"]["objects"]:
+            raise FetchV2EvidenceError("archive object manifest drifted before publish")
+        _write_json(temporary / "fetch-manifest.json", archive["fetch_manifest"])
         os.replace(temporary, output_dir)
         return {"verification": verification, "fetch_manifest": {"object_count": len(object_records), "order_count": len(orders), "trade_count": len(trades)}}
     except (FetchV2EvidenceError, QuantConnectApiError):

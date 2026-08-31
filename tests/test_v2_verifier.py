@@ -85,8 +85,13 @@ def archive_fixture(*, fallback=False):
         "V2_STRING_STATUS": "PASS", "V2_BYTES_STATUS": "FAIL" if fallback else "PASS",
         "V2_CHUNK_STATUS": "PASS", "V2_MANIFEST_STATUS": "PASS",
     }
+    fetch_manifest = {
+        "project_id": int(PROJECT), "backtest_id": "bt", "organization_id": "org", "algorithm_id": ALGORITHM,
+        "order_count": 0, "trade_count": 0, "downloaded_at_utc": "2026-08-31T00:00:00Z",
+        "objects": [{"key": key, "bytes": len(value.encode("utf-8") if type(value) is str else value), "sha256": sha256_b64(value.encode("utf-8") if type(value) is str else value)} for key, value in objects.items()],
+    }
     return {"backtest": {"statistics": statistics}, "object_list": {"objects": listed, "object_storage_used": 4096},
-            "orders": [], "trades": [], "objects": objects}
+            "orders": [], "trades": [], "objects": objects, "fetch_manifest": fetch_manifest}
 
 
 class V2VerifierTests(unittest.TestCase):
@@ -161,6 +166,8 @@ class V2VerifierTests(unittest.TestCase):
         self.assertIn("RUNTIME_STATUS_OR_TRANSPORT_INVALID", result["errors"])
         self.assertIn("OBJECT_METADATA_INVALID", result["errors"])
         self.assertIn("ORDERS_OR_TRADES_NONEMPTY", result["errors"])
+        self.assertEqual(result["object_store"]["status"], "UNAVAILABLE")
+        self.assertEqual(result["attribution"]["reconciliation"], "UNAVAILABLE")
         archive = archive_fixture()
         archive["objects"][next(key for key in archive["objects"] if key.endswith("manifest.json"))] = b"not-json"
         archive["trades"] = [{"id": 1}]
@@ -178,6 +185,50 @@ class V2VerifierTests(unittest.TestCase):
         chunk_key = descriptor["key"]
         self.assertEqual(verify_chunk(archive["objects"][chunk_key], "bytes", descriptor)["status"], "PASS")
         self.assertEqual(recompute_attribution([daily_row("2015-01-02"), daily_row("2015-01-05")])["status"], "PASS")
+
+    def test_runtime_extraction_accepts_real_backtest_wrappers_and_statistics_spellings(self):
+        statistics = archive_fixture()["backtest"]["statistics"]
+        for key in ("statistics", "runtimeStatistics", "runtime_statistics"):
+            for response in ({key: statistics}, {"backtest": {key: statistics}}):
+                with self.subTest(key=key, response=response):
+                    self.assertEqual(extract_runtime_statistics(response)["status"], "PASS")
+
+    def test_recomputed_cumulative_pnl_must_equal_each_declared_sleeve_total(self):
+        daily = [daily_row("2015-01-02"), daily_row("2015-01-05")]
+        daily[1]["sleeves"]["equity"]["cumulative_pnl"] = "1"
+        result = recompute_attribution(daily)
+        self.assertEqual(result["status"], "UNVERIFIED")
+        self.assertIn("ATTRIBUTION_CUMULATIVE_PNL_MISMATCH", result["errors"])
+
+    def test_fetch_manifest_is_required_and_untrusted_public_inputs_never_raise(self):
+        archive = archive_fixture(); del archive["fetch_manifest"]
+        self.assertEqual(verify_archive(archive)["overall_status"], "UNVERIFIED")
+        deeply_nested_json = (b"[" * 3000) + (b"]" * 3000)
+        self.assertEqual(decode_manifest(deeply_nested_json)["status"], "UNVERIFIED")
+
+        class ExplodingMapping(dict):
+            def get(self, *args, **kwargs):
+                raise RecursionError("synthetic")
+
+        for result in (extract_runtime_statistics(ExplodingMapping()),
+                       verify_chunk(b"x", "bytes", ExplodingMapping()),
+                       recompute_attribution(ExplodingMapping())):
+            self.assertEqual(result["status"], "UNVERIFIED")
+
+    def test_fetch_manifest_and_official_object_metadata_are_bound_to_archive(self):
+        archive = archive_fixture()
+        archive["object_list"]["objects"][0].update({"name": "string-1kb.txt", "mime": "text/plain", "folder": False,
+                                                          "modified": "2026-08-31T00:00:00Z", "lastModified": "2026-08-31T00:00:00Z"})
+        self.assertEqual(verify_archive(archive)["overall_status"], "PASS")
+        for mutation, code in (
+            (lambda value: value.__setitem__("order_count", 1), "FETCH_MANIFEST_COUNTS_MISMATCH"),
+            (lambda value: value["objects"][0].__setitem__("sha256", sha256_b64(b"wrong")), "FETCH_MANIFEST_OBJECT_HASH_OR_SIZE_MISMATCH"),
+            (lambda value: value.__setitem__("algorithm_id", "wrong"), "FETCH_MANIFEST_IDENTITY_MISMATCH"),
+        ):
+            changed = archive_fixture(); mutation(changed["fetch_manifest"])
+            result = verify_archive(changed)
+            self.assertEqual(result["overall_status"], "UNVERIFIED")
+            self.assertIn(code, result["errors"])
 
 
 if __name__ == "__main__":

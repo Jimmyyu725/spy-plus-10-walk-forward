@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import gzip
 import io
-import json
 import base64
-from datetime import date
+import json
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
@@ -65,7 +65,14 @@ def _decimal(value: object) -> Decimal:
 def _read_statistics(backtest: object) -> object:
     if not isinstance(backtest, Mapping):
         raise ValueError("backtest")
-    return backtest.get("statistics")
+    candidate = backtest.get("backtest", backtest)
+    if not isinstance(candidate, Mapping):
+        raise ValueError("backtest wrapper")
+    for key in ("statistics", "runtimeStatistics", "runtime_statistics"):
+        value = candidate.get(key)
+        if isinstance(value, Mapping):
+            return value
+    return None
 
 
 def extract_runtime_statistics(backtest) -> dict:
@@ -127,7 +134,7 @@ def decode_manifest(raw) -> dict:
         if len(manifest["chunks"]) > MAX_ARCHIVE_OBJECTS:
             return _result("UNVERIFIED", "MANIFEST_TOO_MANY_CHUNKS")
         return _result("PASS", **manifest)
-    except (UnicodeError, json.JSONDecodeError, EvidenceError, TypeError, ValueError):
+    except Exception:
         return _result("UNVERIFIED", "MANIFEST_MALFORMED")
 
 
@@ -183,7 +190,7 @@ def verify_chunk(raw_transport, transport, descriptor) -> dict:
                 len(daily) != descriptor.get("rows") or daily[0]["date"] != descriptor.get("first_date") or daily[-1]["date"] != descriptor.get("last_date")):
             return _result("FAIL", "CHUNK_DESCRIPTOR_METADATA_MISMATCH")
         return _result("PASS", year=payload["year"], run_variant=payload["run_variant"], synthetic=payload["synthetic"], daily=daily)
-    except (EvidenceError, OSError, EOFError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+    except Exception:
         return _result("UNVERIFIED", "CHUNK_MALFORMED")
 
 
@@ -211,6 +218,8 @@ def recompute_attribution(daily) -> dict:
                 if fee < 0 or slip < 0:
                     return _result("UNVERIFIED", "ATTRIBUTION_COST_INVALID")
                 total += pnl; cumulative[sleeve] += pnl; fees[sleeve] += fee; slippage[sleeve] += slip
+                if _decimal(values.get("cumulative_pnl")) != cumulative[sleeve]:
+                    return _result("UNVERIFIED", "ATTRIBUTION_CUMULATIVE_PNL_MISMATCH")
             change = Decimal("0") if previous_equity is None else current - previous_equity
             if total != change:
                 return _result("UNVERIFIED", "ATTRIBUTION_NOT_CONSERVED")
@@ -236,8 +245,9 @@ def _object_metadata(value: object) -> tuple[dict[str, dict], list[str]]:
     if used is not None and (type(used) is not int or used < 0):
         _add_error(errors, "OBJECT_STORAGE_USED_INVALID")
     items: dict[str, dict] = {}
+    optional_types = {"name": str, "mime": str, "mimeType": str, "modified": str, "lastModified": str, "folder": bool}
     for item in value["objects"]:
-        if not isinstance(item, Mapping) or set(item) - {"key", "size", "modified", "lastModified"} or type(item.get("key")) is not str or not item["key"] or type(item.get("size")) is not int or item["size"] < 0 or len(item["key"]) > 1024:
+        if not isinstance(item, Mapping) or type(item.get("key")) is not str or not item["key"] or type(item.get("size")) is not int or item["size"] < 0 or len(item["key"]) > 1024 or any(key in item and type(item[key]) is not expected for key, expected in optional_types.items()):
             _add_error(errors, "OBJECT_METADATA_INVALID")
             continue
         if item["key"] in items:
@@ -269,23 +279,67 @@ def _check_orders_and_trades(archive: Mapping, errors: list[str]) -> None:
         _add_error(errors, "ORDERS_OR_TRADES_NONEMPTY")
 
 
+def _validate_fetch_manifest(value: object, objects: Mapping, manifest: Mapping | None, orders: object, trades: object) -> list[str]:
+    """Bind the archive's recorded download provenance to its exact raw objects."""
+    try:
+        required = {"project_id", "backtest_id", "organization_id", "algorithm_id", "order_count", "trade_count", "downloaded_at_utc", "objects"}
+        if not isinstance(value, Mapping) or set(value) != required:
+            return ["FETCH_MANIFEST_FIELDS_INVALID"]
+        if type(value["project_id"]) is not int or value["project_id"] < 0 or any(type(value[key]) is not str or not value[key] for key in ("backtest_id", "organization_id", "algorithm_id", "downloaded_at_utc")):
+            return ["FETCH_MANIFEST_TYPES_INVALID"]
+        if type(value["order_count"]) is not int or type(value["trade_count"]) is not int or value["order_count"] < 0 or value["trade_count"] < 0:
+            return ["FETCH_MANIFEST_COUNTS_INVALID"]
+        parsed = datetime.fromisoformat(value["downloaded_at_utc"].replace("Z", "+00:00"))
+        if not value["downloaded_at_utc"].endswith("Z") or parsed.tzinfo is None or parsed.utcoffset().total_seconds() != 0:
+            return ["FETCH_MANIFEST_TIMESTAMP_INVALID"]
+        if type(value["objects"]) is not list or len(value["objects"]) != len(objects) or len(objects) > MAX_ARCHIVE_OBJECTS:
+            return ["FETCH_MANIFEST_OBJECTS_INVALID"]
+        errors: list[str] = []
+        seen = set()
+        records = value["objects"]
+        for index, record in enumerate(records):
+            if not isinstance(record, Mapping) or set(record) != {"key", "bytes", "sha256"} or type(record.get("key")) is not str or type(record.get("bytes")) is not int or record["bytes"] < 0 or type(record.get("sha256")) is not str:
+                _add_error(errors, "FETCH_MANIFEST_OBJECT_RECORD_INVALID"); continue
+            key = record["key"]
+            if key in seen or index >= len(objects) or key != list(objects)[index] or key not in objects:
+                _add_error(errors, "FETCH_MANIFEST_OBJECT_ORDER_OR_DUPLICATE")
+                continue
+            seen.add(key)
+            raw = _storage_bytes(objects[key])
+            if record["bytes"] != len(raw) or record["sha256"] != sha256_b64(raw):
+                _add_error(errors, "FETCH_MANIFEST_OBJECT_HASH_OR_SIZE_MISMATCH")
+        if set(objects) != seen:
+            _add_error(errors, "FETCH_MANIFEST_OBJECT_SET_MISMATCH")
+        if type(orders) is list and value["order_count"] != len(orders) or type(trades) is list and value["trade_count"] != len(trades):
+            _add_error(errors, "FETCH_MANIFEST_COUNTS_MISMATCH")
+        if manifest is not None and (str(value["project_id"]) != manifest.get("project_id") or value["algorithm_id"] != manifest.get("algorithm_id")):
+            _add_error(errors, "FETCH_MANIFEST_IDENTITY_MISMATCH")
+        return errors
+    except Exception:
+        return ["FETCH_MANIFEST_MALFORMED"]
+
+
 def _verify_archive(archive) -> dict:
     """Verify an in-memory archive, collecting all bounded diagnostic codes."""
     errors: list[str] = []
     if not isinstance(archive, Mapping):
         return {"overall_status": "UNVERIFIED", "errors": ["ARCHIVE_INVALID"], "object_store": {}, "attribution": {}}
+    objects = archive.get("objects")
+    if not isinstance(objects, Mapping) or len(objects) > MAX_ARCHIVE_OBJECTS:
+        _add_error(errors, "ARCHIVE_OBJECTS_INVALID")
+        objects = {}
+    for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, None, archive.get("orders"), archive.get("trades")):
+        _add_error(errors, error)
     runtime = extract_runtime_statistics(archive.get("backtest"))
     if runtime["status"] != "PASS":
         for error in runtime["errors"]: _add_error(errors, error)
         _, metadata_errors = _object_metadata(archive.get("object_list"))
         for error in metadata_errors: _add_error(errors, error)
         _check_orders_and_trades(archive, errors)
-        return {"overall_status": "UNVERIFIED", "errors": errors, "runtime": runtime, "object_store": {}, "attribution": {}}
+        return {"overall_status": "UNVERIFIED", "errors": errors, "runtime": runtime,
+                "object_store": {"status": "UNAVAILABLE"}, "attribution": {"reconciliation": "UNAVAILABLE"}}
     metadata, metadata_errors = _object_metadata(archive.get("object_list"))
     for error in metadata_errors: _add_error(errors, error)
-    objects = archive.get("objects")
-    if not isinstance(objects, Mapping) or len(objects) > MAX_ARCHIVE_OBJECTS:
-        _add_error(errors, "ARCHIVE_OBJECTS_INVALID"); objects = {}
     required = [runtime["string_key"], runtime["manifest_key"]]
     if runtime["transport"] == "bytes": required.insert(1, runtime["bytes_key"])
     for key in required:
@@ -300,7 +354,11 @@ def _verify_archive(archive) -> dict:
     if manifest_result["status"] != "PASS":
         _add_error(errors, manifest_result["errors"][0])
         _check_orders_and_trades(archive, errors)
-        return {"overall_status": "UNVERIFIED", "errors": errors, "runtime": runtime, "object_store": {"string_round_trip": string_probe["status"], "bytes_round_trip": bytes_probe["status"]}, "attribution": {}}
+        return {"overall_status": "UNVERIFIED", "errors": errors, "runtime": runtime,
+                "object_store": {"status": "UNVERIFIED", "string_round_trip": string_probe["status"], "bytes_round_trip": bytes_probe["status"]},
+                "attribution": {"reconciliation": "UNAVAILABLE"}}
+    for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, manifest_result, archive.get("orders"), archive.get("trades")):
+        _add_error(errors, error)
     if manifest_result["transport"] != runtime["transport"]: _add_error(errors, "MANIFEST_TRANSPORT_MISMATCH")
     expected_prefix = f"{manifest_result['project_id']}/v2/{manifest_result['frozen_commit']}/{manifest_result['run_label']}/{manifest_result['algorithm_id']}"
     if expected_prefix != runtime["prefix"] or build_manifest_key(manifest_result["project_id"], manifest_result["frozen_commit"], manifest_result["run_label"], manifest_result["algorithm_id"]) != runtime["manifest_key"]:

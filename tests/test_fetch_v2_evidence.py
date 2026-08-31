@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -61,6 +62,7 @@ class FetchV2EvidenceTests(unittest.TestCase):
             self.assertEqual(key_map, {key: f"objects/{index:04d}.bin" for index, key in enumerate(downloaded_keys, 1)})
             archived_text = "\n".join(path.read_text(errors="ignore") for path in target.glob("*.json"))
             self.assertNotIn("secret-value", archived_text)
+            self.assertEqual(verifier_cli.verify_archive(verifier_cli.load_archive(target)), result["verification"])
 
     def test_existing_target_causes_zero_api_calls(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -95,6 +97,31 @@ class FetchV2EvidenceTests(unittest.TestCase):
             with self.assertRaises(fetcher.FetchV2EvidenceError):
                 fetcher.fetch_v2_evidence(FakeClient(archive), project_id=123, backtest_id="bt", organization_id="org", output_dir=parent / "capability")
             self.assertEqual(list(parent.iterdir()), [])
+
+    def test_downloaded_fetch_manifest_is_verified_and_archive_paths_reject_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            loaded = verifier_cli.load_archive(archive)
+            self.assertEqual(loaded["fetch_manifest"]["algorithm_id"], "algo-7")
+            self.assertEqual(verifier_cli.verify_archive(loaded)["overall_status"], "PASS")
+            key_map = json.loads((archive / "key-map.json").read_text())
+            target = archive / key_map[next(iter(key_map))]
+            outside = Path(directory) / "same-content.bin"
+            outside.write_bytes(target.read_bytes())
+            target.unlink()
+            os.symlink(outside, target)
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
+
+    def test_local_reader_rejects_duplicate_json_keys_and_accepts_string_transport_limit(self):
+        self.assertGreater(verifier_cli.MAX_STRING_TRANSPORT_BYTES, verifier_cli.MAX_CHUNK_BYTES)
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            (archive / "key-map.json").write_text('{"x":"objects/0001.bin","x":"objects/0001.bin"}')
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
 
 
 if __name__ == "__main__":
