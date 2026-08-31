@@ -68,6 +68,7 @@ class FetchV2EvidenceTests(unittest.TestCase):
             target = Path(directory) / "capability"
             fixture = archive_fixture()
             fixture["backtest"]["message"] = "Authorization: Bearer secret-value https://example.invalid/file?sig=secret-value"
+            fixture["backtest"]["metadata"] = {"access-token": "structured-secret", "user": "alice", "url": "https://example.invalid/plain"}
             client = FakeClient(fixture)
             result = fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=target)
             self.assertTrue(target.is_dir())
@@ -83,6 +84,8 @@ class FetchV2EvidenceTests(unittest.TestCase):
             self.assertEqual(key_map, {key: f"objects/{index:04d}.bin" for index, key in enumerate(downloaded_keys, 1)})
             archived_text = "\n".join(path.read_text(errors="ignore") for path in target.glob("*.json"))
             self.assertNotIn("secret-value", archived_text)
+            self.assertNotIn("structured-secret", archived_text)
+            self.assertIn("https://example.invalid/plain", archived_text)
             self.assertEqual(fetcher._safe_value({"user": "alice", "url": "https://example.invalid/plain"}), {"user": "alice", "url": "https://example.invalid/plain"})
             self.assertEqual(verifier_cli.verify_archive(verifier_cli.load_archive(target), expected_identity={"project_id": 123, "backtest_id": "bt", "organization_id": "org"}), result["verification"])
 
@@ -199,6 +202,36 @@ class FetchV2EvidenceTests(unittest.TestCase):
         self.assertTrue(all(fetcher._safe_value(value) == "[REDACTED]" for value in sensitive))
         self.assertEqual(fetcher._safe_value({"user": "alice", "url": "https://host.invalid/plain", "key": "abc"}), {"user": "alice", "url": "https://host.invalid/plain", "key": "[REDACTED]"})
         self.assertEqual(fetcher._safe_value({"key": "evidence/path", "size": 1, "folder": False}), {"key": "evidence/path", "size": 1, "folder": False})
+
+    def test_deep_json_and_jsonl_are_archive_errors_and_cli_publishes_unverified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            (archive / "key-map.json").write_text("[" * 10_000 + "]" * 10_000, encoding="utf-8")
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
+            output = Path(directory) / "deep-verification.json"
+            command = ["verify_v2_evidence.py", "--archive", str(archive), "--output", str(output), "--expected-project-id", "123", "--expected-backtest-id", "bt", "--expected-organization-id", "org"]
+            with mock.patch("sys.argv", command):
+                self.assertEqual(verifier_cli.main(), 1)
+            self.assertEqual(json.loads(output.read_text())["overall_status"], "UNVERIFIED")
+            self.assertFalse(list(Path(directory).glob(".tmp*")))
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            (archive / "orders.jsonl").write_text("[" * 10_000 + "]" * 10_000 + "\n", encoding="utf-8")
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
+
+    def test_structured_credential_keys_are_redacted_without_breaking_object_records(self):
+        values = {"access-token": "a", "refresh token": "b", "client_secret": "c", "vendor_token": "d", "vendor secret": "e", "db_password": "f", "cloud_credentials": "g", "authorization": "h", "cookie": "i", "user": "alice", "url": "https://host.invalid/plain"}
+        cleaned = fetcher._safe_value(values)
+        self.assertTrue(all(cleaned[key] == "[REDACTED]" for key in values if key not in {"user", "url"}))
+        self.assertEqual(cleaned["user"], "alice")
+        self.assertEqual(cleaned["url"], "https://host.invalid/plain")
+        record = {"key": "evidence/object", "bytes": 1, "sha256": "hash", "access_token": "secret"}
+        self.assertEqual(fetcher._safe_value(record)["key"], "evidence/object")
+        self.assertEqual(fetcher._safe_value(record)["access_token"], "[REDACTED]")
 
 
 if __name__ == "__main__":

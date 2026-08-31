@@ -34,15 +34,25 @@ class FetchV2EvidenceError(RuntimeError):
     """Raised when a v2 archive cannot be completely downloaded and verified."""
 
 
-_SENSITIVE = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie", "token", "api-token", "api_token", "api key", "api-key", "api_key", "key", "password", "secret", "credentials"})
-_SENSITIVE_VALUE = re.compile(r"(?i)(?:\bauthorization\s*[:=]\s*\S+|\b(?:bearer|basic)\s+\S+|\b(?:api[-_ ]?(?:token|key)|key|token|password|secret|cookie)\s*[:=]\s*\S+|[?&](?:x-amz-[^=]+|x-goog-(?:signature|credential|security-token|algorithm|date|expires|signedheaders)|signature|sig|token|password|api[-_]?key|key)=[^&\s]+)")
+_SENSITIVE = frozenset({"authorization", "proxy_authorization", "cookie", "set_cookie", "token", "api_token", "api_key", "key", "password", "secret", "credentials", "credential", "client_secret", "access_token", "refresh_token"})
+_SENSITIVE_SUFFIXES = ("_token", "_secret", "_password", "_credential", "_credentials")
+_SENSITIVE_VALUE = re.compile(r"(?i)(?:\bauthorization\s*[:=]\s*\S+|\b(?:bearer|basic)\s+\S+|\b(?:(?:api|access|refresh)[-_ ]?(?:token|key)|client[-_ ]?secret|key|token|password|secret|cookie)\s*[:=]\s*\S+|[?&](?:x-amz-[^=]+|x-goog-(?:signature|credential|security-token|algorithm|date|expires|signedheaders)|signature|sig|token|password|api[-_]?key|key)=[^&\s]+)")
 _MAX_TRANSPORT_BYTES = len("base64-gzip:") + 4 * ((MAX_CHUNK_BYTES + 2) // 3)
+
+
+def _sensitive_key(key: object, *, object_record: bool) -> bool:
+    if type(key) is not str:
+        return False
+    normalized = re.sub(r"[-\s]+", "_", key.lower())
+    if normalized == "key" and object_record:
+        return False
+    return normalized in _SENSITIVE or normalized.endswith(_SENSITIVE_SUFFIXES)
 
 
 def _safe_value(value):
     if isinstance(value, dict):
         object_record = ("key" in value and (("size" in value and "folder" in value) or ("bytes" in value and "sha256" in value)))
-        return {str(key): ("[REDACTED]" if type(key) is str and key.lower() in _SENSITIVE and not (key.lower() == "key" and object_record) else _safe_value(item)) for key, item in value.items()}
+        return {str(key): ("[REDACTED]" if _sensitive_key(key, object_record=object_record) else _safe_value(item)) for key, item in value.items()}
     if isinstance(value, list):
         return [_safe_value(item) for item in value]
     if isinstance(value, str) and _SENSITIVE_VALUE.search(value):

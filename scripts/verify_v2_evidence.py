@@ -77,15 +77,15 @@ def _no_duplicate_object(pairs):
 def _read_json(directory_fd: int, name: str, maximum: int = MAX_JSON_BYTES):
     try:
         return json.loads(_read_bytes(directory_fd, name, maximum).decode("utf-8"), object_pairs_hook=_no_duplicate_object)
-    except (UnicodeError, json.JSONDecodeError) as error:
+    except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSON is invalid") from error
 
 
 def _read_jsonl(directory_fd: int, name: str) -> list:
-    raw = _read_bytes(directory_fd, name, MAX_JSON_BYTES)
     try:
+        raw = _read_bytes(directory_fd, name, MAX_JSON_BYTES)
         rows = [json.loads(line, object_pairs_hook=_no_duplicate_object) for line in raw.decode("utf-8").splitlines() if line]
-    except (UnicodeError, json.JSONDecodeError) as error:
+    except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSONL is invalid") from error
     if len(rows) > MAX_ARCHIVE_OBJECTS:
         raise ArchiveReadError("archive JSONL has too many rows")
@@ -146,8 +146,9 @@ def main() -> int:
     parser.add_argument("--expected-organization-id", required=True)
     arguments = parser.parse_args()
     temporary = None
-    try:
-        result = verify_archive(load_archive(arguments.archive), expected_identity={"project_id": arguments.expected_project_id, "backtest_id": arguments.expected_backtest_id, "organization_id": arguments.expected_organization_id})
+
+    def publish(result: dict) -> None:
+        nonlocal temporary
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=arguments.output.parent, delete=False) as stream:
             json.dump(result, stream, sort_keys=True, allow_nan=False)
@@ -158,8 +159,19 @@ def main() -> int:
         os.link(temporary, arguments.output)
         temporary.unlink()
         temporary = None
+
+    try:
+        result = verify_archive(load_archive(arguments.archive), expected_identity={"project_id": arguments.expected_project_id, "backtest_id": arguments.expected_backtest_id, "organization_id": arguments.expected_organization_id})
+        publish(result)
         return 0 if result["overall_status"] in {"PASS", "PASS_WITH_STRING_FALLBACK"} else 1
-    except (ArchiveReadError, OSError) as error:
+    except ArchiveReadError as error:
+        try:
+            publish({"overall_status": "UNVERIFIED", "errors": ["ARCHIVE_READ_FAILED"], "object_store": {}, "attribution": {}})
+        except OSError:
+            pass
+        print(f"verification failed: {type(error).__name__}", file=sys.stderr)
+        return 1
+    except OSError as error:
         print(f"verification failed: {type(error).__name__}", file=sys.stderr)
         return 1
     finally:
