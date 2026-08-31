@@ -1,5 +1,6 @@
 import copy
 import unittest
+from collections.abc import Mapping
 from decimal import Decimal
 
 import spy_plus_10.v2.attribution as attribution
@@ -24,6 +25,28 @@ def marks(core="0", equity="0", futures="0", defensive_option="0"):
     }
 
 
+class UnhashableKeyMapping(Mapping):
+    def __getitem__(self, key):
+        raise KeyError(key)
+
+    def __iter__(self):
+        return iter(([],))
+
+    def __len__(self):
+        return 1
+
+
+class ExplodingMapping(Mapping):
+    def __getitem__(self, key):
+        raise KeyError(key)
+
+    def __iter__(self):
+        raise ValueError("mapping exploded")
+
+    def __len__(self):
+        return 0
+
+
 class V2AttributionTests(unittest.TestCase):
     def test_daily_pnl_reconciles_to_equity_change_after_external_deposit(self):
         ledger = SleeveLedger(initial_equity="1000000")
@@ -38,14 +61,21 @@ class V2AttributionTests(unittest.TestCase):
         row = ledger.record_day(
             "2015-01-05",
             marks("606000", "148000", "101000", "0"),
-            cash="200000",
+            cash="199975",
             external_flow="50000",
             fees={"equity": "25"},
             slippage={"futures": "10"},
         )
-        self.assertEqual(row["equity"], Decimal("1055000"))
-        self.assertEqual(row["portfolio_daily_pnl"], Decimal("5000"))
-        self.assertEqual(sum(row["sleeve_daily_pnl"].values()), Decimal("5000"))
+        self.assertEqual(row["equity"], Decimal("1054975"))
+        self.assertEqual(row["portfolio_daily_pnl"], Decimal("4975"))
+        self.assertEqual(row["sleeve_daily_pnl"], {
+            "core": Decimal("6000"),
+            "equity": Decimal("-2025"),
+            "futures": Decimal("1000"),
+            "defensive_option": Decimal("0"),
+        })
+        self.assertEqual(row["sleeve_cumulative_pnl"], row["sleeve_daily_pnl"])
+        self.assertEqual(sum(row["sleeve_daily_pnl"].values()), Decimal("4975"))
         self.assertEqual(row["fees"]["equity"], Decimal("25"))
         self.assertEqual(row["slippage"]["futures"], Decimal("10"))
 
@@ -123,6 +153,12 @@ class V2AttributionTests(unittest.TestCase):
                     SleeveLedger("100").record_day(
                         "2015-01-02", marks("100"), cash="0", external_flow="0", **kwargs
                     )
+        for value in (UnhashableKeyMapping(), ExplodingMapping()):
+            with self.subTest(value=type(value).__name__):
+                with self.assertRaises(AttributionError):
+                    SleeveLedger("100").record_day(
+                        "2015-01-02", value, cash="0", external_flow="0", fees={}, slippage={}
+                    )
 
     def test_dates_and_invalid_numbers_are_rejected(self):
         ledger = SleeveLedger("100")
@@ -173,6 +209,70 @@ class V2AttributionTests(unittest.TestCase):
         )
         self.assertEqual(marked["portfolio_daily_pnl"], Decimal("2"))
         self.assertEqual(marked["sleeve_daily_pnl"]["equity"], Decimal("2"))
+
+    def test_explicit_fee_is_attributed_to_equity_not_core_residual(self):
+        ledger = SleeveLedger("100")
+        ledger.record_day("2015-01-02", marks("0"), cash="100", external_flow="0", fees={}, slippage={})
+        row = ledger.record_day(
+            "2015-01-05",
+            marks(equity="10"),
+            cash="89",
+            external_flow="0",
+            fees={"equity": "1"},
+            slippage={},
+            sleeve_cash_flows={"equity": "10"},
+        )
+        self.assertEqual(row["portfolio_daily_pnl"], Decimal("-1"))
+        self.assertEqual(row["sleeve_daily_pnl"]["equity"], Decimal("-1"))
+        self.assertEqual(row["sleeve_daily_pnl"]["core"], Decimal("0"))
+        self.assertEqual(row["sleeve_cumulative_pnl"]["equity"], Decimal("-1"))
+
+    def test_slippage_metadata_is_not_deducted_twice(self):
+        ledger = SleeveLedger("100")
+        ledger.record_day("2015-01-02", marks("0"), cash="100", external_flow="0", fees={}, slippage={})
+        row = ledger.record_day(
+            "2015-01-05",
+            marks(equity="10"),
+            cash="89.5",
+            external_flow="0",
+            fees={},
+            slippage={"equity": "0.5"},
+            sleeve_cash_flows={"equity": "10.5"},
+        )
+        self.assertEqual(row["portfolio_daily_pnl"], Decimal("-0.5"))
+        self.assertEqual(row["sleeve_daily_pnl"]["equity"], Decimal("-0.5"))
+        self.assertEqual(row["sleeve_daily_pnl"]["core"], Decimal("0"))
+
+    def test_fee_and_slippage_reconcile_without_unallocated_fee_residual(self):
+        ledger = SleeveLedger("100")
+        ledger.record_day("2015-01-02", marks("0"), cash="100", external_flow="0", fees={}, slippage={})
+        row = ledger.record_day(
+            "2015-01-05",
+            marks(equity="10"),
+            cash="88.5",
+            external_flow="0",
+            fees={"equity": "1"},
+            slippage={"equity": "0.5"},
+            sleeve_cash_flows={"equity": "10.5"},
+        )
+        self.assertEqual(row["portfolio_daily_pnl"], Decimal("-1.5"))
+        self.assertEqual(row["sleeve_daily_pnl"]["equity"], Decimal("-1.5"))
+        self.assertEqual(row["sleeve_daily_pnl"]["core"], Decimal("0"))
+        self.assertEqual(sum(row["sleeve_daily_pnl"].values()), Decimal("-1.5"))
+
+    def test_opening_activity_fails_closed(self):
+        for field, value in (
+            ("fees", {"equity": "1"}),
+            ("slippage", {"equity": "1"}),
+            ("sleeve_cash_flows", {"equity": "1"}),
+        ):
+            with self.subTest(field=field):
+                kwargs = {"fees": {}, "slippage": {}, "sleeve_cash_flows": None}
+                kwargs[field] = value
+                with self.assertRaises(AttributionError):
+                    SleeveLedger("100").record_day(
+                        "2015-01-02", marks("0"), cash="100", external_flow="0", **kwargs
+                    )
 
     def test_core_owns_exact_global_cash_residual_without_other_bucket(self):
         ledger = SleeveLedger("100")

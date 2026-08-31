@@ -1,10 +1,11 @@
 """Daily sleeve attribution for separately executed v2 component runs.
 
-``sleeve_cash_flows`` is net portfolio cash invested in a sleeve during the
-day: positive moves cash into positions and negative returns cash from them.
-It is neither an external deposit nor PnL.  Each component and removal
-ablation is an independent ``run_variant`` configuration; this module never
-derives an ablation by subtracting a sleeve from a full-portfolio path.
+``sleeve_cash_flows`` is actual position principal at the executed price:
+positive moves cash into a sleeve's positions and negative returns cash from
+them.  It excludes explicit fees; the actual price already incorporates
+slippage.  Each component and removal ablation is an independent
+``run_variant`` configuration; this module never derives an ablation by
+subtracting a sleeve from a full-portfolio path.
 """
 
 from __future__ import annotations
@@ -75,21 +76,28 @@ def _parse_day(value: object) -> date:
 def _sleeve_mapping(value: object, label: str, *, complete: bool) -> dict[str, Decimal]:
     if not isinstance(value, Mapping):
         raise AttributionError(f"{label} must be a mapping")
-    keys = set(value)
-    unknown = keys - set(SLEEVES)
-    if unknown:
-        raise AttributionError(f"{label} contains unknown sleeves")
-    if complete and keys != set(SLEEVES):
-        raise AttributionError(f"{label} must contain exactly four sleeves")
-    return {name: _d(value.get(name, _ZERO), f"{label}.{name}") for name in SLEEVES}
+    try:
+        keys = set(value)
+        unknown = keys - set(SLEEVES)
+        if unknown:
+            raise AttributionError(f"{label} contains unknown sleeves")
+        if complete and keys != set(SLEEVES):
+            raise AttributionError(f"{label} must contain exactly four sleeves")
+        return {name: _d(value.get(name, _ZERO), f"{label}.{name}") for name in SLEEVES}
+    except AttributionError:
+        raise
+    except Exception as error:
+        raise AttributionError(f"{label} is an invalid mapping") from error
 
 
 class SleeveLedger:
     """Reconcile daily total equity with per-sleeve PnL for one run variant.
 
-    Cash is owned by ``core``.  Therefore, after position-mark PnL and sleeve
-    cash flows are attributed, the exact unallocated cash residual is assigned
-    to ``core`` instead of an implicit ``other`` bucket.
+    Cash is owned by ``core``.  Therefore, after position-mark PnL, principal
+    cash flows, and explicit sleeve fees are attributed, the exact unallocated
+    cash residual is assigned to ``core`` instead of an implicit ``other``
+    bucket.  Slippage is recorded only as metadata because it is already in
+    the actual principal flow.
     """
 
     def __init__(self, initial_equity, run_variant: str = "full") -> None:
@@ -154,12 +162,18 @@ class SleeveLedger:
         if self._last_values is None:
             if equity - flow != self._initial_equity:
                 raise AttributionError("opening ledger does not match initial equity")
+            if any(
+                value != _ZERO
+                for values in (fee_map, slippage_map, cash_flow_map)
+                for value in values.values()
+            ):
+                raise AttributionError("opening ledger must be a baseline snapshot")
             portfolio_pnl = _ZERO
             daily_pnl = {name: _ZERO for name in SLEEVES}
         else:
             portfolio_pnl = equity - self._last_equity - flow
             daily_pnl = {
-                name: current[name] - self._last_values[name] - cash_flow_map[name]
+                name: current[name] - self._last_values[name] - cash_flow_map[name] - fee_map[name]
                 for name in SLEEVES
             }
             cash_residual = portfolio_pnl - sum(daily_pnl.values(), _ZERO)
