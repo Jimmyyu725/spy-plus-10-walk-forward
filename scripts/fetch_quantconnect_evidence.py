@@ -69,10 +69,11 @@ def load_credentials(path: Path) -> tuple[str, str]:
 
 
 class QuantConnectClient:
-    def __init__(self, user_id: str, api_token: str, *, session=None):
+    def __init__(self, user_id: str, api_token: str, *, session=None, sleep=time.sleep):
         self._user_id = str(user_id)
         self._api_token = str(api_token)
         self._session = session or _UrllibSession()
+        self._sleep = sleep
 
     def _headers(self) -> dict[str, str]:
         timestamp = str(int(time.time()))
@@ -113,6 +114,22 @@ class QuantConnectClient:
             {"projectId": int(project_id), "backtestId": str(backtest_id)},
         )
 
+    def _read_rows_page(self, endpoint: str, field: str, payload: dict) -> list[dict]:
+        for attempt in range(30):
+            result = self._post_json(endpoint, payload)
+            if not isinstance(result, dict):
+                raise QuantConnectApiError(f"QuantConnect {field} response is invalid")
+            page = result.get(field)
+            if isinstance(page, list):
+                return page
+            if result.get("status") == "loading":
+                if attempt < 29:
+                    self._sleep(1)
+                    continue
+                break
+            raise QuantConnectApiError(f"QuantConnect {field} response is invalid")
+        raise QuantConnectApiError(f"QuantConnect {field} response timed out")
+
     def read_all_backtest_rows(
         self,
         endpoint: str,
@@ -124,23 +141,69 @@ class QuantConnectClient:
         start = 0
         page_size = 99
         while True:
-            result = self._post_json(
-                endpoint,
-                {
-                    "start": start,
-                    "end": start + page_size,
-                    "projectId": int(project_id),
-                    "backtestId": str(backtest_id),
-                },
-            )
-            page = result.get(field)
-            if not isinstance(page, list):
-                raise QuantConnectApiError(f"QuantConnect {field} response is invalid")
+            payload = {
+                "start": start,
+                "end": start + page_size,
+                "projectId": int(project_id),
+                "backtestId": str(backtest_id),
+            }
+            page = self._read_rows_page(endpoint, field, payload)
             rows.extend(page)
             if len(page) < page_size:
                 break
-            start += len(page)
+            next_start = start + len(page)
+            if next_start <= start:
+                raise QuantConnectApiError(f"QuantConnect {field} pagination did not advance")
+            start = next_start
         return rows
+
+    def list_objects(self, organization_id: str, path: str) -> dict:
+        objects = []
+        page = 1
+        total_pages = None
+        used = None
+        while True:
+            result = self._post_json(
+                "object/list",
+                {
+                    "organizationId": str(organization_id),
+                    "path": str(path),
+                    "page": page,
+                },
+            )
+            if not isinstance(result, dict):
+                raise QuantConnectApiError("Object Store list response is invalid")
+            response_page = result.get("page")
+            response_total_pages = result.get("totalPages")
+            values = result.get("objects")
+            if (
+                not isinstance(response_page, int)
+                or isinstance(response_page, bool)
+                or response_page != page
+                or not isinstance(response_total_pages, int)
+                or isinstance(response_total_pages, bool)
+                or response_total_pages < page
+                or not isinstance(values, list)
+                or any(not isinstance(value, dict) for value in values)
+            ):
+                raise QuantConnectApiError("Object Store list response is invalid")
+            if total_pages is None:
+                total_pages = response_total_pages
+            elif response_total_pages != total_pages:
+                raise QuantConnectApiError("Object Store list pagination changed")
+            if "objectStorageUsed" in result:
+                response_used = result["objectStorageUsed"]
+                if (
+                    not isinstance(response_used, int)
+                    or isinstance(response_used, bool)
+                    or response_used < 0
+                ):
+                    raise QuantConnectApiError("Object Store list response is invalid")
+                used = response_used
+            objects.extend(values)
+            if page == total_pages:
+                return {"objects": objects, "object_storage_used": used}
+            page += 1
 
     def download_object(self, organization_id: str, key: str) -> bytes:
         result = self._post_json(
@@ -160,7 +223,7 @@ class QuantConnectClient:
             )
             url = result.get("url")
             if not url:
-                time.sleep(1)
+                self._sleep(1)
         if not url:
             raise QuantConnectApiError("Object Store download did not become ready")
         response = self._session.get(str(url), timeout=60)
