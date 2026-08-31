@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
@@ -125,14 +126,15 @@ def _read_jsonl(directory_fd: int, name: str) -> list:
     try:
         raw = _read_bytes(directory_fd, name, MAX_JSON_BYTES)
         tokens, rows = 0, []
-        for line in raw.decode("utf-8").splitlines():
-            if line:
-                tokens = _scan_json_structure(line, used_tokens=tokens)
-                rows.append(json.loads(line, object_pairs_hook=_no_duplicate_object))
+        for line in io.StringIO(raw.decode("utf-8")):
+            if not line.strip():
+                continue
+            if len(rows) >= MAX_ARCHIVE_OBJECTS:
+                raise ArchiveReadError("archive JSONL has too many rows")
+            tokens = _scan_json_structure(line, used_tokens=tokens + 1)
+            rows.append(json.loads(line, object_pairs_hook=_no_duplicate_object))
     except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError) as error:
         raise ArchiveReadError("archive JSONL is invalid") from error
-    if len(rows) > MAX_ARCHIVE_OBJECTS:
-        raise ArchiveReadError("archive JSONL has too many rows")
     return rows
 
 

@@ -34,8 +34,9 @@ class FetchV2EvidenceError(RuntimeError):
     """Raised when a v2 archive cannot be completely downloaded and verified."""
 
 
-_SENSITIVE = frozenset({"authorization", "proxy_authorization", "cookie", "set_cookie", "token", "api_token", "api_key", "auth_token", "key", "password", "secret", "credentials", "credential", "client_secret", "access_token", "refresh_token", "private_key", "access_key", "secret_key"})
+_SENSITIVE = frozenset({"authorization", "proxy_authorization", "cookie", "set_cookie", "token", "api_token", "api_key", "auth_token", "key", "password", "secret", "credentials", "credential", "client_secret", "access_token", "refresh_token", "private_key", "access_key", "access_key_id", "secret_key", "secret_access_key"})
 _SENSITIVE_SUFFIXES = ("_token", "_secret", "_password", "_credential", "_credentials")
+_SENSITIVE_COMPOUND_SUFFIXES = ("_api_key", "_access_key", "_access_key_id", "_secret_key", "_secret_access_key", "_private_key")
 _SENSITIVE_VALUE = re.compile(r"(?i)(?:\bauthorization\s*[:=]\s*\S+|\b(?:bearer|basic)\s+\S+|\b(?:(?:api|access|refresh|auth)\s*[-_ ]?\s*(?:token|key)|client\s*[-_ ]?\s*secret|(?:private|secret)\s*[-_ ]?\s*key|key|token|password|secret|cookie)\s*[:=]\s*\S+|[?&](?:x-amz-[^=]+|x-goog-(?:signature|credential|security-token|algorithm|date|expires|signedheaders)|signature|sig|token|password|api[-_]?key|key)=[^&\s]+)")
 _MAX_TRANSPORT_BYTES = len("base64-gzip:") + 4 * ((MAX_CHUNK_BYTES + 2) // 3)
 
@@ -48,7 +49,7 @@ def _sensitive_key(key: object, *, object_record: bool) -> bool:
     normalized = re.sub(r"[-\s]+", "_", normalized).lower()
     if normalized == "key" and object_record:
         return False
-    return normalized in _SENSITIVE or normalized.endswith(_SENSITIVE_SUFFIXES)
+    return normalized in _SENSITIVE or normalized.endswith(_SENSITIVE_SUFFIXES + _SENSITIVE_COMPOUND_SUFFIXES)
 
 
 def _safe_value(value):
