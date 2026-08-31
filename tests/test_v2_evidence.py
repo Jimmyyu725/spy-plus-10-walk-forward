@@ -1,8 +1,10 @@
 import base64
 import copy
 import gzip
+import hashlib
 import json
 import unittest
+from decimal import Decimal
 
 from spy_plus_10.v2.evidence import (
     MAX_CHUNK_BYTES,
@@ -151,6 +153,13 @@ class V2EvidenceTests(unittest.TestCase):
                 with self.assertRaises(EvidenceError):
                     decode_transport(value)
 
+    def test_transport_base64_golden_vectors_are_canonical_on_all_supported_pythons(self):
+        self.assertEqual(decode_transport("base64-gzip:YWJj"), b"abc")
+        for noncanonical in ("base64-gzip:YWJj=", "base64-gzip:YWJj=="):
+            with self.subTest(noncanonical=noncanonical):
+                with self.assertRaises(EvidenceError):
+                    decode_transport(noncanonical)
+
     def test_valid_daily_row_chunk_descriptor_and_manifest(self):
         payload = valid_payload()
         self.assertEqual(validate_daily_row(payload["daily"][0], 2015).isoformat(), "2015-01-02")
@@ -279,6 +288,52 @@ class V2EvidenceTests(unittest.TestCase):
             with self.subTest(field=field):
                 with self.assertRaises(EvidenceError):
                     validate_chunk(payload)
+
+    def test_chunk_encoding_and_transport_enforce_real_five_mib_limit(self):
+        payload = valid_payload()
+        blocks = (hashlib.sha256(index.to_bytes(8, "big")).digest() for index in range(225_000))
+        payload["padding"] = base64.b64encode(b"".join(blocks)).decode("ascii")
+        actual_gzip = gzip.compress(canonical_json_bytes(payload), compresslevel=9, mtime=0)
+        self.assertGreater(len(actual_gzip), MAX_CHUNK_BYTES)
+
+        with self.assertRaises(EvidenceError):
+            encode_chunk(payload)
+        for value in (b"", b"x" * (MAX_CHUNK_BYTES + 1)):
+            with self.subTest(value_length=len(value)):
+                with self.assertRaises(EvidenceError):
+                    encode_string_transport(value)
+                with self.assertRaises(EvidenceError):
+                    decode_transport(value)
+        max_base64_chars = 4 * ((MAX_CHUNK_BYTES + 2) // 3)
+        with self.assertRaises(EvidenceError):
+            decode_transport("base64-gzip:" + "A" * (max_base64_chars + 1))
+
+    def test_descriptor_is_bound_to_the_exact_canonical_chunk(self):
+        payload = valid_payload()
+        encoded = encode_chunk(payload)
+        key = build_chunk_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, 2015)
+        chunk_descriptor(2015, key, encoded, payload["daily"])
+        alternate_daily = copy.deepcopy(payload["daily"])
+        alternate_daily[0]["cash"] = "999999.00"
+        noncanonical = gzip.compress(canonical_json_bytes(payload), compresslevel=9, mtime=1)
+        for year, candidate, daily in (
+            (2015, b"not gzip", payload["daily"]),
+            (2015, encoded, alternate_daily),
+            (2016, encoded, payload["daily"]),
+            (2015, noncanonical, payload["daily"]),
+        ):
+            with self.subTest(year=year, candidate=candidate[:10]):
+                with self.assertRaises(EvidenceError):
+                    chunk_descriptor(year, key, candidate, daily)
+
+    def test_validate_chunk_rejects_non_json_native_values_before_encode(self):
+        payload = valid_payload()
+        payload["daily"][0]["walk_forward"]["selected_parameters"] = {"threshold": Decimal("1.0")}
+
+        with self.assertRaises(EvidenceError):
+            validate_chunk(payload)
+        with self.assertRaises(EvidenceError):
+            encode_chunk(payload)
 
     def test_sha256_b64_is_standard_digest_encoding(self):
         self.assertEqual(sha256_b64(b"abc"), "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=")

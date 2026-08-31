@@ -1,4 +1,9 @@
-"""Deterministic, local-only v2 annual evidence encoding and validation."""
+"""Deterministic, local-only v2 annual evidence encoding and validation.
+
+Persist a verified annual chunk only in this order: ``encode_chunk(payload)``,
+``chunk_descriptor(year, key, encoded, payload["daily"])``, then
+``build_manifest(...)``. Object-store writes occur only after those local gates.
+"""
 
 import base64
 import binascii
@@ -32,6 +37,8 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 _TRANSPORT_PREFIX = "base64-gzip:"
+_MAX_TRANSPORT_B64_CHARS = 4 * ((MAX_CHUNK_BYTES + 2) // 3)
+_MAX_RAW_CHUNK_BYTES = 64 * 1024 * 1024
 _DAILY_FIELDS = frozenset(
     {
         "date",
@@ -141,6 +148,24 @@ def sha256_b64(value: object) -> str:
     if type(value) is not bytes:
         _fail("sha256 input must be bytes")
     return base64.b64encode(hashlib.sha256(value).digest()).decode("ascii")
+
+
+def _canonical_b64_decode(value: object, label: str) -> bytes:
+    if type(value) is not str:
+        _fail(f"{label} invalid")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise EvidenceError(f"{label} invalid") from error
+    if base64.b64encode(decoded).decode("ascii") != value:
+        _fail(f"{label} invalid")
+    return decoded
+
+
+def _validate_encoded_chunk(value: object, label: str) -> bytes:
+    if type(value) is not bytes or not value or len(value) > MAX_CHUNK_BYTES:
+        _fail(f"{label} invalid")
+    return value
 
 
 def _parse_date(value: object, label: str) -> date:
@@ -299,6 +324,7 @@ def validate_chunk(payload: object) -> None:
             if walk_forward["training_start"] is None:
                 _fail("non-synthetic chunk requires walk_forward training dates")
         previous = row_date
+    canonical_json_bytes(chunk)
 
 
 def encode_chunk(payload: object) -> bytes:
@@ -307,42 +333,64 @@ def encode_chunk(payload: object) -> bytes:
     output = io.BytesIO()
     with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=9, mtime=0, filename="") as compressed:
         compressed.write(serialized)
-    return output.getvalue()
+    return _validate_encoded_chunk(output.getvalue(), "encoded chunk")
 
 
 def encode_string_transport(value: object) -> str:
-    if type(value) is not bytes:
-        _fail("string transport input must be bytes")
-    return _TRANSPORT_PREFIX + base64.b64encode(value).decode("ascii")
+    encoded = _validate_encoded_chunk(value, "string transport input")
+    return _TRANSPORT_PREFIX + base64.b64encode(encoded).decode("ascii")
 
 
 def decode_transport(value: object) -> bytes:
     if type(value) is bytes:
-        return value
+        return _validate_encoded_chunk(value, "evidence transport")
     if type(value) is not str or not value.startswith(_TRANSPORT_PREFIX):
         _fail("invalid evidence transport")
+    encoded_text = value[len(_TRANSPORT_PREFIX):]
+    if len(encoded_text) > _MAX_TRANSPORT_B64_CHARS:
+        _fail("invalid base64-gzip transport")
+    decoded = _canonical_b64_decode(encoded_text, "base64-gzip transport")
+    return _validate_encoded_chunk(decoded, "evidence transport")
+
+
+def _decode_canonical_chunk(encoded: bytes) -> dict:
     try:
-        return base64.b64decode(value[len(_TRANSPORT_PREFIX):], validate=True)
-    except (ValueError, binascii.Error) as error:
-        raise EvidenceError(f"invalid base64-gzip transport: {error}") from error
+        with gzip.GzipFile(fileobj=io.BytesIO(encoded), mode="rb") as compressed:
+            raw = compressed.read(_MAX_RAW_CHUNK_BYTES + 1)
+    except (OSError, EOFError) as error:
+        raise EvidenceError(f"invalid gzip chunk: {error}") from error
+    if len(raw) > _MAX_RAW_CHUNK_BYTES:
+        _fail("gzip chunk exceeds raw size limit")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"invalid gzip JSON chunk: {error}") from error
+    if type(payload) is not dict:
+        _fail("gzip chunk payload must be an object")
+    return payload
 
 
 def chunk_descriptor(year: object, key: object, encoded: object, daily: object) -> dict:
     chunk_year = _validate_year(year)
     if type(key) is not str or not key:
         _fail("chunk descriptor key invalid")
-    if type(encoded) is not bytes or not encoded or len(encoded) > MAX_CHUNK_BYTES:
-        _fail("chunk descriptor encoded bytes invalid")
+    compressed = _validate_encoded_chunk(encoded, "chunk descriptor encoded bytes")
     if type(daily) is not list or not daily:
         _fail("chunk descriptor daily must be a non-empty list")
-    dates = [validate_daily_row(row, chunk_year) for row in daily]
+    payload = _decode_canonical_chunk(compressed)
+    validate_chunk(payload)
+    if payload["year"] != chunk_year or payload["daily"] != daily:
+        _fail("chunk descriptor does not match encoded payload")
+    if encode_chunk(payload) != compressed:
+        _fail("chunk descriptor encoded payload is not canonical")
+    dates = [validate_daily_row(row, chunk_year) for row in payload["daily"]]
     if any(right <= left for left, right in zip(dates, dates[1:])):
         _fail("chunk descriptor daily dates must be strictly increasing")
     return {
         "year": chunk_year,
         "key": key,
-        "encoded_bytes": len(encoded),
-        "sha256": sha256_b64(encoded),
+        "encoded_bytes": len(compressed),
+        "sha256": sha256_b64(compressed),
         "first_date": dates[0].isoformat(),
         "last_date": dates[-1].isoformat(),
         "rows": len(daily),
@@ -350,13 +398,8 @@ def chunk_descriptor(year: object, key: object, encoded: object, daily: object) 
 
 
 def _validate_sha256(value: object) -> None:
-    if type(value) is not str:
-        _fail("descriptor sha256 invalid")
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as error:
-        raise EvidenceError("descriptor sha256 invalid") from error
-    if len(decoded) != 32 or base64.b64encode(decoded).decode("ascii") != value:
+    decoded = _canonical_b64_decode(value, "descriptor sha256")
+    if len(decoded) != 32:
         _fail("descriptor sha256 invalid")
 
 
