@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from spy_plus_10.v2_foundation import (
+    EXPECTED_MAIN_SOURCE,
     EXPECTED_MANIFEST,
     FORBIDDEN_SOURCE,
     PROJECT_NAME,
@@ -14,17 +15,7 @@ from spy_plus_10.v2_foundation import (
 )
 
 
-VALID_MAIN = """from AlgorithmImports import *
-
-
-class SpyPlusTenV2EvidenceCapability(QCAlgorithm):
-    def initialize(self) -> None:
-        self.set_start_date(2015, 1, 2)
-        self.set_end_date(2015, 1, 5)
-        self.set_cash(1_000_000)
-        self._git_commit = self.get_parameter("v2_git_commit")
-        self._run_label = self.get_parameter("evidence_run_label")
-"""
+VALID_MAIN = EXPECTED_MAIN_SOURCE
 VALID_CONFIG = {
     "algorithm-language": "Python",
     "parameters": {},
@@ -73,6 +64,23 @@ class V2FoundationTests(unittest.TestCase):
         self.assertEqual(status.project_name, "SPY Plus 10 Walk-Forward v2")
         self.assertEqual(status.mode, "evidence-capability-smoke")
         self.assertFalse(status.live_trading)
+
+    def test_exact_main_contract_is_the_final_capability_algorithm(self):
+        self.assertIn("def _run_capability_smoke", EXPECTED_MAIN_SOURCE)
+        self.assertIn("SYNTHETIC_CAPABILITY_FIXTURE", EXPECTED_MAIN_SOURCE)
+        self.assertIn("for key in all_keys:", EXPECTED_MAIN_SOURCE)
+        self.assertLess(
+            EXPECTED_MAIN_SOURCE.index("encoded = encode_chunk(payload)"),
+            EXPECTED_MAIN_SOURCE.index("descriptor = chunk_descriptor("),
+        )
+        self.assertLess(
+            EXPECTED_MAIN_SOURCE.index("descriptor = chunk_descriptor("),
+            EXPECTED_MAIN_SOURCE.index("manifest = build_manifest("),
+        )
+        self.assertLess(
+            EXPECTED_MAIN_SOURCE.index("manifest = build_manifest("),
+            EXPECTED_MAIN_SOURCE.index("for key in all_keys:"),
+        )
 
     def test_valid_temporary_project_passes(self):
         status = validate_v2_foundation(self.root)
