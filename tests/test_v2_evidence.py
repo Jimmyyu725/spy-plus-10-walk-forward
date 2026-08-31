@@ -3,6 +3,7 @@ import copy
 import gzip
 import hashlib
 import json
+import re
 import unittest
 import zlib
 from decimal import Decimal
@@ -32,6 +33,7 @@ PROJECT = "spy-plus-10"
 COMMIT = "a" * 40
 RUN_LABEL = "capability-2015"
 ALGORITHM = "spy-plus-10-v2"
+LEAN_LOCAL_OBJECT_STORE_PATH_RE = re.compile(r"^\.?[a-zA-Z0-9\\/_#\-\$= ]+\.?[a-zA-Z0-9]*$")
 
 
 def valid_row(day="2015-01-02"):
@@ -107,15 +109,18 @@ class V2EvidenceTests(unittest.TestCase):
 
     def test_key_layout_contains_all_immutable_identity(self):
         prefix = f"{PROJECT}/v2/{COMMIT}/{RUN_LABEL}/{ALGORITHM}"
-        self.assertEqual(
-            build_probe_keys(PROJECT, COMMIT, RUN_LABEL, ALGORITHM),
-            {
-                "string": f"{prefix}/capability/string-1kb.txt",
-                "bytes": f"{prefix}/capability/bytes-1kb.bin",
-            },
-        )
-        self.assertEqual(build_chunk_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, 2015), f"{prefix}/evidence/2015.json.gz")
-        self.assertEqual(build_manifest_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM), f"{prefix}/manifest.json")
+        probes = build_probe_keys(PROJECT, COMMIT, RUN_LABEL, ALGORITHM)
+        self.assertEqual(probes, {
+            "string": f"{prefix}/capability/string-1kb.txt",
+            "bytes": f"{prefix}/capability/bytes-1kb.bin",
+        })
+        chunk = build_chunk_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM, 2015)
+        manifest = build_manifest_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM)
+        for key in (*probes.values(), chunk, manifest):
+            with self.subTest(key=key):
+                self.assertIsNotNone(LEAN_LOCAL_OBJECT_STORE_PATH_RE.fullmatch(key))
+        self.assertEqual(chunk, f"{prefix}/evidence/2015.jsonGz")
+        self.assertEqual(manifest, f"{prefix}/manifest.json")
 
     def test_invalid_identity_commit_and_year_are_rejected(self):
         for value in ("", ".", "..", "bad/path", "space here", True, 1):

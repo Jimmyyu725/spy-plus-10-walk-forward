@@ -128,7 +128,7 @@ class V2VerifierTests(unittest.TestCase):
 
     def test_string_transport_downloaded_as_bytes_and_metadata_size_must_match(self):
         archive = archive_fixture(fallback=True)
-        chunk_key = next(key for key in archive["objects"] if key.endswith(".json.gz"))
+        chunk_key = next(key for key in archive["objects"] if key.endswith(".jsonGz"))
         archive["objects"][chunk_key] = archive["objects"][chunk_key].encode("utf-8")
         self.assertEqual(verify_archive(archive)["overall_status"], "PASS_WITH_STRING_FALLBACK")
         archive = archive_fixture()
@@ -143,7 +143,7 @@ class V2VerifierTests(unittest.TestCase):
         cases.append(duplicate)
         hash_wrong = archive_fixture(); hash_wrong["backtest"]["backtest"]["runtimeStatistics"]["V2_STRING_SHA256"] = sha256_b64(b"wrong")
         cases.append(hash_wrong)
-        bad_date = archive_fixture(); chunk_key = next(key for key in bad_date["objects"] if key.endswith(".json.gz"));
+        bad_date = archive_fixture(); chunk_key = next(key for key in bad_date["objects"] if key.endswith(".jsonGz"));
         # Make malformed compressed content after a valid descriptor was recorded.
         bad_date["objects"][chunk_key] = b"not a gzip stream"
         cases.append(bad_date)
@@ -163,7 +163,7 @@ class V2VerifierTests(unittest.TestCase):
     def test_malformed_metadata_and_bombs_are_bounded(self):
         archive = archive_fixture()
         archive["object_list"]["objects"][0]["size"] = True
-        archive["objects"][next(key for key in archive["objects"] if key.endswith(".json.gz"))] = b"\x1f\x8b" + b"x" * (5 * 1024 * 1024)
+        archive["objects"][next(key for key in archive["objects"] if key.endswith(".jsonGz"))] = b"\x1f\x8b" + b"x" * (5 * 1024 * 1024)
         result = verify_archive(archive)
         self.assertEqual(result["overall_status"], "UNVERIFIED")
         self.assertLessEqual(len(result["errors"]), 64)

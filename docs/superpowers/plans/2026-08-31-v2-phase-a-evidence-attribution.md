@@ -330,7 +330,7 @@ class V2EvidenceTests(unittest.TestCase):
     def test_key_contains_every_immutable_identity(self):
         commit = "a" * 40
         key = build_chunk_key(123, commit, "phase-a-capability", "algo-7", 2015)
-        self.assertEqual(key, "123/v2/" + commit + "/phase-a-capability/algo-7/evidence/2015.json.gz")
+        self.assertEqual(key, "123/v2/" + commit + "/phase-a-capability/algo-7/evidence/2015.jsonGz")
         self.assertTrue(build_manifest_key(123, commit, "phase-a-capability", "algo-7").endswith("/manifest.json"))
 
     def test_gzip_is_deterministic_and_round_trips(self):
@@ -416,7 +416,7 @@ def build_probe_keys(project_id, commit: str, run_label: str, algorithm_id: str)
 def build_chunk_key(project_id, commit: str, run_label: str, algorithm_id: str, year: int) -> str:
     if not 2015 <= int(year) <= 2100:
         raise EvidenceError("evidence year is invalid")
-    return f"{_prefix(project_id, commit, run_label, algorithm_id)}/evidence/{int(year)}.json.gz"
+    return f"{_prefix(project_id, commit, run_label, algorithm_id)}/evidence/{int(year)}.jsonGz"
 
 
 def build_manifest_key(project_id, commit: str, run_label: str, algorithm_id: str) -> str:

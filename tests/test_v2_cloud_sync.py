@@ -438,7 +438,7 @@ class V2CloudSyncTests(unittest.TestCase):
             ("string", FakeObjectStore(false_suffix="capability/string-1kb.txt"), {
                 "string": "UNVERIFIED", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
             }),
-            ("chunk", FakeObjectStore(false_suffix="evidence/2015.json.gz"), {
+            ("chunk", FakeObjectStore(false_suffix="evidence/2015.jsonGz"), {
                 "string": "PASS", "bytes": "PASS", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
             }),
             ("manifest", FakeObjectStore(false_suffix="manifest.json"), {
@@ -458,7 +458,7 @@ class V2CloudSyncTests(unittest.TestCase):
             ("string", "capability/string-1kb.txt", {
                 "string": "UNVERIFIED", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
             }),
-            ("chunk", "evidence/2015.json.gz", {
+            ("chunk", "evidence/2015.jsonGz", {
                 "string": "PASS", "bytes": "PASS", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
             }),
             ("manifest", "manifest.json", {

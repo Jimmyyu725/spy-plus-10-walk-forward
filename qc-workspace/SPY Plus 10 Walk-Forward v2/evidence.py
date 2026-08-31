@@ -133,7 +133,7 @@ def build_probe_keys(project_id: object, commit: object, run_label: object, algo
 
 
 def build_chunk_key(project_id: object, commit: object, run_label: object, algorithm_id: object, year: object) -> str:
-    return f"{_prefix(project_id, commit, run_label, algorithm_id)}/evidence/{_validate_year(year)}.json.gz"
+    return f"{_prefix(project_id, commit, run_label, algorithm_id)}/evidence/{_validate_year(year)}.jsonGz"
 
 
 def build_manifest_key(project_id: object, commit: object, run_label: object, algorithm_id: object) -> str:
