@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from scripts.fetch_quantconnect_evidence import (
+    MAX_BACKTEST_ROW_PAGES,
     MAX_OBJECT_LIST_PAGES,
     QuantConnectApiError,
     QuantConnectClient,
@@ -115,6 +116,45 @@ class FetchQuantConnectEvidenceTests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 1)
         payloads = [call.args[1] for call in client._post_json.call_args_list]
         self.assertEqual([payload["start"] for payload in payloads], [0, 99, 99])
+
+    def test_backtest_rows_allow_nine_hundred_ninety_nine_full_pages_then_a_short_page(self):
+        sleep = Mock()
+        client = QuantConnectClient("123", "secret", session=Mock(), sleep=sleep)
+        full_page = [{"id": "full"}] * 99
+        calls_for_last_page = 0
+
+        def rows_page(_endpoint, payload):
+            nonlocal calls_for_last_page
+            page = payload["start"] // 99 + 1
+            if page < MAX_BACKTEST_ROW_PAGES:
+                return {"success": True, "orders": full_page}
+            if page == MAX_BACKTEST_ROW_PAGES:
+                calls_for_last_page += 1
+                if calls_for_last_page == 1:
+                    return {"success": True, "status": "loading"}
+                return {"success": True, "orders": [{"id": "last"}]}
+            self.fail("the client requested a page after the allowed maximum")
+
+        client._post_json = Mock(side_effect=rows_page)
+
+        rows = client.read_all_backtest_rows("backtests/orders/read", "orders", 1, "bt")
+
+        self.assertEqual(len(rows), (MAX_BACKTEST_ROW_PAGES - 1) * 99 + 1)
+        self.assertEqual(client._post_json.call_count, MAX_BACKTEST_ROW_PAGES + 1)
+        sleep.assert_called_once_with(1)
+
+    def test_backtest_rows_reject_a_thousandth_full_page_without_requesting_another(self):
+        client = QuantConnectClient("123", "secret", session=Mock(), sleep=Mock())
+        client._post_json = Mock(return_value={"success": True, "orders": [{"id": "full"}] * 99})
+
+        with self.assertRaises(QuantConnectApiError):
+            client.read_all_backtest_rows("backtests/orders/read", "orders", 1, "bt")
+
+        self.assertEqual(client._post_json.call_count, MAX_BACKTEST_ROW_PAGES)
+        self.assertEqual(
+            client._post_json.call_args.args[1]["start"],
+            (MAX_BACKTEST_ROW_PAGES - 1) * 99,
+        )
 
     def test_object_list_reads_all_pages(self):
         client = QuantConnectClient("123", "secret", session=Mock())

@@ -21,6 +21,7 @@ from spy_plus_10.frozen_evaluation import extract_cloud_statistics
 
 
 BASE_URL = "https://www.quantconnect.com/api/v2"
+MAX_BACKTEST_ROW_PAGES = 1000
 MAX_OBJECT_LIST_PAGES = 1000
 
 
@@ -141,7 +142,12 @@ class QuantConnectClient:
         rows = []
         start = 0
         page_size = 99
+        page_count = 0
         while True:
+            if page_count >= MAX_BACKTEST_ROW_PAGES:
+                raise QuantConnectApiError(
+                    f"QuantConnect {field} exceeded safe page limit"
+                )
             payload = {
                 "start": start,
                 "end": start + page_size,
@@ -149,9 +155,14 @@ class QuantConnectClient:
                 "backtestId": str(backtest_id),
             }
             page = self._read_rows_page(endpoint, field, payload)
+            page_count += 1
             rows.extend(page)
             if len(page) < page_size:
                 break
+            if page_count >= MAX_BACKTEST_ROW_PAGES:
+                raise QuantConnectApiError(
+                    f"QuantConnect {field} exceeded safe page limit"
+                )
             next_start = start + len(page)
             if next_start <= start:
                 raise QuantConnectApiError(f"QuantConnect {field} pagination did not advance")
