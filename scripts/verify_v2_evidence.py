@@ -98,7 +98,7 @@ def load_archive(archive_dir: Path) -> dict:
     objects_fd = None
     try:
         names = set(os.listdir(root_fd))
-        required = {"backtest.json", "orders.jsonl", "trades.jsonl", "object-list.json", "key-map.json", "fetch-manifest.json", "objects"}
+        required = {"backtest.json", "orders.jsonl", "trades.jsonl", "object-list.json", "object-lists.json", "key-map.json", "fetch-manifest.json", "objects"}
         if not required.issubset(names) or not names.issubset(_ROOT_FILES):
             raise ArchiveReadError("archive root entries are invalid")
         objects_fd = _open_directory(Path("objects"), dir_fd=root_fd)
@@ -128,7 +128,7 @@ def load_archive(archive_dir: Path) -> dict:
         records = fetch_manifest["objects"]
         if [record.get("key") if isinstance(record, dict) else None for record in records] != ordered_keys or len(records) != len(key_map):
             raise ArchiveReadError("archive fetch manifest order is invalid")
-        return {"backtest": _read_json(root_fd, "backtest.json"), "object_list": _read_json(root_fd, "object-list.json"),
+        return {"backtest": _read_json(root_fd, "backtest.json"), "object_list": _read_json(root_fd, "object-list.json"), "object_lists": _read_json(root_fd, "object-lists.json"),
                 "orders": _read_jsonl(root_fd, "orders.jsonl"), "trades": _read_jsonl(root_fd, "trades.jsonl"),
                 "objects": objects, "fetch_manifest": fetch_manifest}
     finally:

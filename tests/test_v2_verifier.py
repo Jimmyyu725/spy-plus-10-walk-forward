@@ -70,16 +70,19 @@ def archive_fixture(*, fallback=False):
     bytes_probe = bytes(index % 251 for index in range(1024))
     objects = {string_key: string_probe, chunk_key: encode_string_transport(chunk) if fallback else chunk,
                manifest_key: canonical_json_bytes(manifest)}
-    listed = [{"key": string_key, "size": len(string_probe), "folder": False},
-              {"key": chunk_key, "size": len(objects[chunk_key]), "folder": False},
-              {"key": manifest_key, "size": len(objects[manifest_key]), "folder": False}]
+    prefix = chunk_key.rsplit("/evidence/", 1)[0]
+    root_listed = [{"key": manifest_key, "size": len(objects[manifest_key]), "folder": False},
+                   {"key": prefix + "/capability", "size": 0, "folder": True},
+                   {"key": prefix + "/evidence", "size": 0, "folder": True}]
+    capability_listed = [{"key": string_key, "size": len(string_probe), "folder": False}]
+    evidence_listed = [{"key": chunk_key, "size": len(objects[chunk_key]), "folder": False}]
     if not fallback:
         objects[bytes_key] = bytes_probe
-        listed.insert(1, {"key": bytes_key, "size": len(bytes_probe), "folder": False})
+        capability_listed.append({"key": bytes_key, "size": len(bytes_probe), "folder": False})
     statistics = {
         "V2_CAPABILITY_STATUS": "PASS_WITH_STRING_FALLBACK" if fallback else "PASS",
         "V2_TRANSPORT": transport,
-        "V2_EVIDENCE_PREFIX": chunk_key.rsplit("/evidence/", 1)[0],
+        "V2_EVIDENCE_PREFIX": prefix,
         "V2_STRING_KEY": string_key, "V2_BYTES_KEY": bytes_key, "V2_MANIFEST_KEY": manifest_key,
         "V2_STRING_SHA256": sha256_b64(string_probe), "V2_BYTES_SHA256": sha256_b64(bytes_probe),
         "V2_STRING_STATUS": "PASS", "V2_BYTES_STATUS": "FAIL" if fallback else "PASS",
@@ -90,7 +93,8 @@ def archive_fixture(*, fallback=False):
         "order_count": 0, "trade_count": 0, "downloaded_at_utc": "2026-08-31T00:00:00Z",
         "objects": [{"key": key, "bytes": len(value.encode("utf-8") if type(value) is str else value), "sha256": sha256_b64(value.encode("utf-8") if type(value) is str else value)} for key, value in objects.items()],
     }
-    return {"backtest": {"backtest": {"backtestId": "bt", "projectId": int(PROJECT), "organizationId": "org", "runtimeStatistics": statistics}}, "object_list": {"objects": listed, "object_storage_used": 4096},
+    object_lists = {name: {"path": path, "listed_paths": [item["key"] for item in entries], "objects": entries, "object_storage_used": 4096} for name, path, entries in (("root", prefix, root_listed), ("capability", prefix + "/capability", capability_listed), ("evidence", prefix + "/evidence", evidence_listed))}
+    return {"backtest": {"backtest": {"backtestId": "bt", "projectId": int(PROJECT), "organizationId": "org", "runtimeStatistics": statistics}}, "object_list": {"objects": [*root_listed, *capability_listed, *evidence_listed], "object_storage_used": 4096}, "object_lists": object_lists,
             "orders": [], "trades": [], "objects": objects, "fetch_manifest": fetch_manifest}
 
 
@@ -241,6 +245,18 @@ class V2VerifierTests(unittest.TestCase):
             result = verify_archive(changed)
             self.assertEqual(result["overall_status"], "UNVERIFIED")
             self.assertIn(code, result["errors"])
+
+    def test_direct_object_lists_are_required_and_bound_to_the_aggregate(self):
+        archive = archive_fixture()
+        del archive["object_lists"]["capability"]["objects"][0]
+        result = verify_archive(archive)
+        self.assertEqual(result["overall_status"], "UNVERIFIED")
+        self.assertIn("OBJECT_LISTS_LISTED_PATHS_INVALID", result["errors"])
+        archive = archive_fixture()
+        archive["object_lists"]["root"]["objects"][0]["folder"] = True
+        result = verify_archive(archive)
+        self.assertEqual(result["overall_status"], "UNVERIFIED")
+        self.assertIn("OBJECT_LISTS_ROOT_PLACEMENT_INVALID", result["errors"])
 
     def test_external_identity_anchor_rejects_coordinated_internal_tampering(self):
         archive = archive_fixture()

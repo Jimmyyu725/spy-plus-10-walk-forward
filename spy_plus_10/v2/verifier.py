@@ -298,6 +298,53 @@ def _object_metadata(value: object) -> tuple[dict[str, dict], list[str]]:
     return items, errors
 
 
+def _validate_object_lists(value: object, aggregate: object, runtime: Mapping, manifest: Mapping | None = None) -> list[str]:
+    """Bind the three direct Object Store listings to their aggregate view."""
+    try:
+        names = ("root", "capability", "evidence")
+        prefix = runtime["prefix"]
+        expected_paths = {"root": prefix, "capability": prefix + "/capability", "evidence": prefix + "/evidence"}
+        if not isinstance(value, Mapping) or set(value) != set(names):
+            return ["OBJECT_LISTS_INVALID"]
+        listings, metadata = {}, {}
+        errors: list[str] = []
+        expected_fields = {"path", "listed_paths", "objects", "object_storage_used"}
+        for name in names:
+            listing = value[name]
+            if not isinstance(listing, Mapping) or set(listing) != expected_fields or listing.get("path") != expected_paths[name] or not isinstance(listing.get("listed_paths"), list):
+                _add_error(errors, "OBJECT_LISTS_PATH_INVALID")
+                continue
+            items, item_errors = _object_metadata({"objects": listing["objects"], "object_storage_used": listing["object_storage_used"]})
+            for error in item_errors:
+                _add_error(errors, error)
+            paths = [item.get("key") if isinstance(item, Mapping) else None for item in listing["objects"]]
+            if listing["listed_paths"] != paths or len(set(paths)) != len(paths) or any(type(path) is not str for path in paths):
+                _add_error(errors, "OBJECT_LISTS_LISTED_PATHS_INVALID")
+            listings[name], metadata[name] = listing, items
+        if len(listings) != len(names):
+            return errors or ["OBJECT_LISTS_INVALID"]
+        used = [listings[name]["object_storage_used"] for name in names]
+        if any(item != used[0] for item in used[1:]):
+            _add_error(errors, "OBJECT_LISTS_STORAGE_USED_MISMATCH")
+        root_expected = {runtime["manifest_key"]: False, prefix + "/capability": True, prefix + "/evidence": True}
+        if set(metadata["root"]) != set(root_expected) or any(metadata["root"].get(key, {}).get("folder") is not folder for key, folder in root_expected.items()):
+            _add_error(errors, "OBJECT_LISTS_ROOT_PLACEMENT_INVALID")
+        capability_expected = {runtime["string_key"]: False}
+        if runtime["transport"] == "bytes":
+            capability_expected[runtime["bytes_key"]] = False
+        if set(metadata["capability"]) != set(capability_expected) or any(metadata["capability"].get(key, {}).get("folder") is not folder for key, folder in capability_expected.items()):
+            _add_error(errors, "OBJECT_LISTS_CAPABILITY_PLACEMENT_INVALID")
+        if manifest is not None:
+            evidence_expected = {descriptor["key"]: False for descriptor in manifest["chunks"]}
+            if set(metadata["evidence"]) != set(evidence_expected) or any(metadata["evidence"].get(key, {}).get("folder") is not folder for key, folder in evidence_expected.items()):
+                _add_error(errors, "OBJECT_LISTS_EVIDENCE_PLACEMENT_INVALID")
+        if not isinstance(aggregate, Mapping) or aggregate.get("object_storage_used") != used[0] or aggregate.get("objects") != [*listings["root"]["objects"], *listings["capability"]["objects"], *listings["evidence"]["objects"]]:
+            _add_error(errors, "OBJECT_LISTS_AGGREGATE_MISMATCH")
+        return errors
+    except Exception:
+        return ["OBJECT_LISTS_MALFORMED"]
+
+
 def _synthetic_fixture(chunk: dict) -> list[str]:
     errors: list[str] = []
     daily = chunk.get("daily", [])
@@ -405,11 +452,15 @@ def _verify_archive(archive, expected_identity=None) -> dict:
         for error in runtime["errors"]: _add_error(errors, error)
         _, metadata_errors = _object_metadata(archive.get("object_list"))
         for error in metadata_errors: _add_error(errors, error)
+        if not isinstance(archive.get("object_lists"), Mapping) or set(archive["object_lists"]) != {"root", "capability", "evidence"}:
+            _add_error(errors, "OBJECT_LISTS_INVALID")
         _check_orders_and_trades(archive, errors)
         return {"overall_status": "UNVERIFIED", "errors": errors, "runtime": runtime,
                 "object_store": {"status": "UNAVAILABLE"}, "attribution": {"reconciliation": "UNAVAILABLE"}}
     metadata, metadata_errors = _object_metadata(archive.get("object_list"))
     for error in metadata_errors: _add_error(errors, error)
+    for error in _validate_object_lists(archive.get("object_lists"), archive.get("object_list"), runtime):
+        _add_error(errors, error)
     required = [runtime["string_key"], runtime["manifest_key"]]
     if runtime["transport"] == "bytes": required.insert(1, runtime["bytes_key"])
     for key in required:
@@ -428,6 +479,8 @@ def _verify_archive(archive, expected_identity=None) -> dict:
                 "object_store": {"status": "UNVERIFIED", "string_round_trip": string_probe["status"], "bytes_round_trip": bytes_probe["status"]},
                 "attribution": {"reconciliation": "UNAVAILABLE"}}
     for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, manifest_result, backtest_identity, archive.get("orders"), archive.get("trades")):
+        _add_error(errors, error)
+    for error in _validate_object_lists(archive.get("object_lists"), archive.get("object_list"), runtime, manifest_result):
         _add_error(errors, error)
     if manifest_result["transport"] != runtime["transport"]: _add_error(errors, "MANIFEST_TRANSPORT_MISMATCH")
     expected_prefix = f"{manifest_result['project_id']}/v2/{manifest_result['frozen_commit']}/{manifest_result['run_label']}/{manifest_result['algorithm_id']}"

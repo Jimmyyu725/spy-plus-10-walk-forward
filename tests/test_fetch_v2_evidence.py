@@ -53,6 +53,15 @@ class FakeClient:
         return self.archive["objects"][key]
 
 
+class FlattenedClient(FakeClient):
+    """Regression double for the old, invalid descendant-flattened assumption."""
+    def list_objects(self, organization_id, prefix):
+        self._call("list", prefix)
+        if prefix.endswith(("/capability", "/evidence")):
+            return {"objects": [], "object_storage_used": self.archive["object_list"]["object_storage_used"]}
+        return self.archive["object_list"]
+
+
 class FetchV2EvidenceTests(unittest.TestCase):
     def test_success_publishes_only_after_full_download_and_verify(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,6 +93,13 @@ class FetchV2EvidenceTests(unittest.TestCase):
             with self.assertRaises(fetcher.FetchV2EvidenceError):
                 fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=target)
             self.assertEqual(client.calls, [])
+
+    def test_flattened_root_listing_is_rejected_before_any_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = FlattenedClient(archive_fixture())
+            with self.assertRaises(fetcher.FetchV2EvidenceError):
+                fetcher.fetch_v2_evidence(client, project_id=123, backtest_id="bt", organization_id="org", output_dir=Path(directory) / "capability")
+            self.assertNotIn("download", [name for name, _ in client.calls])
 
     def test_atomic_publish_never_clobbers_a_racing_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +187,18 @@ class FetchV2EvidenceTests(unittest.TestCase):
             (archive / "key-map.json").write_text('{"x":"objects/0001.bin","x":"objects/0001.bin"}')
             with self.assertRaises(verifier_cli.ArchiveReadError):
                 verifier_cli.load_archive(archive)
+
+    def test_object_lists_are_required_and_sanitization_is_precise(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "capability"
+            fetcher.fetch_v2_evidence(FakeClient(archive_fixture()), project_id=123, backtest_id="bt", organization_id="org", output_dir=archive)
+            (archive / "object-lists.json").unlink()
+            with self.assertRaises(verifier_cli.ArchiveReadError):
+                verifier_cli.load_archive(archive)
+        sensitive = ["Authorization: abc123", "authorization=abc123", "api_token=abc123", "api-key: abc123", "api key=abc123", "key=abc123", "cookie: abc123", "Basic abc123", "Bearer abc123", "https://host.invalid/a?X-Goog-Signature=abc", "https://host.invalid/a?X-Amz-Credential=abc", "https://host.invalid/a?signature=abc"]
+        self.assertTrue(all(fetcher._safe_value(value) == "[REDACTED]" for value in sensitive))
+        self.assertEqual(fetcher._safe_value({"user": "alice", "url": "https://host.invalid/plain", "key": "abc"}), {"user": "alice", "url": "https://host.invalid/plain", "key": "[REDACTED]"})
+        self.assertEqual(fetcher._safe_value({"key": "evidence/path", "size": 1, "folder": False}), {"key": "evidence/path", "size": 1, "folder": False})
 
 
 if __name__ == "__main__":

@@ -34,14 +34,15 @@ class FetchV2EvidenceError(RuntimeError):
     """Raised when a v2 archive cannot be completely downloaded and verified."""
 
 
-_SENSITIVE = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie", "token", "api-token", "api_token", "password", "secret", "credentials"})
-_SENSITIVE_VALUE = re.compile(r"(?i)(?:\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]+=*|\b(?:cookie|token|password|secret)\s*[:=]|[?&](?:x-amz-(?:signature|credential|security-token)|signature|sig|token|password|api[-_]?key)=[^&\s]+)")
+_SENSITIVE = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie", "token", "api-token", "api_token", "api key", "api-key", "api_key", "key", "password", "secret", "credentials"})
+_SENSITIVE_VALUE = re.compile(r"(?i)(?:\bauthorization\s*[:=]\s*\S+|\b(?:bearer|basic)\s+\S+|\b(?:api[-_ ]?(?:token|key)|key|token|password|secret|cookie)\s*[:=]\s*\S+|[?&](?:x-amz-[^=]+|x-goog-(?:signature|credential|security-token|algorithm|date|expires|signedheaders)|signature|sig|token|password|api[-_]?key|key)=[^&\s]+)")
 _MAX_TRANSPORT_BYTES = len("base64-gzip:") + 4 * ((MAX_CHUNK_BYTES + 2) // 3)
 
 
 def _safe_value(value):
     if isinstance(value, dict):
-        return {str(key): ("[REDACTED]" if type(key) is str and key.lower() in _SENSITIVE else _safe_value(item)) for key, item in value.items()}
+        object_record = ("key" in value and (("size" in value and "folder" in value) or ("bytes" in value and "sha256" in value)))
+        return {str(key): ("[REDACTED]" if type(key) is str and key.lower() in _SENSITIVE and not (key.lower() == "key" and object_record) else _safe_value(item)) for key, item in value.items()}
     if isinstance(value, list):
         return [_safe_value(item) for item in value]
     if isinstance(value, str) and _SENSITIVE_VALUE.search(value):
@@ -96,6 +97,18 @@ def _fetch_manifest(*, project_id: int, backtest_id: str, organization_id: str, 
             "downloaded_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "objects": records}
 
 
+def _require_direct_files(listing: object, expected: dict[str, bool]) -> None:
+    """Reject flattened Object Store replies before downloading any raw object."""
+    if not isinstance(listing, dict) or not isinstance(listing.get("objects"), list):
+        raise FetchV2EvidenceError("Object Store listing is invalid")
+    entries = listing["objects"]
+    if any(not isinstance(item, dict) or type(item.get("key")) is not str or type(item.get("size")) is not int or item["size"] < 0 or type(item.get("folder")) is not bool for item in entries):
+        raise FetchV2EvidenceError("Object Store listing metadata is invalid")
+    actual = {item["key"]: item for item in entries}
+    if len(actual) != len(entries) or set(actual) != set(expected) or any(actual[key]["folder"] is not folder for key, folder in expected.items()):
+        raise FetchV2EvidenceError("Object Store listing has invalid direct placement")
+
+
 def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization_id: str, output_dir: Path) -> dict:
     """Fetch exactly one archive, validate it offline, then atomically publish it."""
     output_dir = Path(output_dir)
@@ -118,6 +131,11 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         used = [value.get("object_storage_used") for value in (root_list, capability_list)]
         if any(value != used[0] for value in used[1:]):
             raise FetchV2EvidenceError("Object Store storage-used values disagree")
+        _require_direct_files(root_list, {runtime["manifest_key"]: False, runtime["prefix"] + "/capability": True, runtime["prefix"] + "/evidence": True})
+        known_capability = {runtime["string_key"]: False}
+        if runtime["transport"] == "bytes":
+            known_capability[runtime["bytes_key"]] = False
+        _require_direct_files(capability_list, known_capability)
         listed_items = {item.get("key"): item for listing in (root_list, capability_list) for item in listing["objects"] if isinstance(item, dict) and type(item.get("key")) is str}
         keys = [runtime["string_key"]]
         if runtime["transport"] == "bytes":
@@ -148,14 +166,15 @@ def fetch_v2_evidence(client, *, project_id: int, backtest_id: str, organization
         evidence_list = client.list_objects(organization_id, runtime["prefix"] + "/evidence")
         if not isinstance(evidence_list, dict) or not isinstance(evidence_list.get("objects"), list) or evidence_list.get("object_storage_used") != used[0]:
             raise FetchV2EvidenceError("Object Store evidence listing is invalid")
+        _require_direct_files(evidence_list, {descriptor["key"]: False for descriptor in manifest["chunks"]})
         for item in evidence_list["objects"]:
             if isinstance(item, dict) and type(item.get("key")) is str:
                 listed_items[item["key"]] = item
         object_list = {"objects": [*root_list["objects"], *capability_list["objects"], *evidence_list["objects"]], "object_storage_used": used[0]}
         object_lists = {
-            "root": {"path": runtime["prefix"], "listed_paths": [item.get("key") for item in root_list["objects"] if isinstance(item, dict)], **root_list},
-            "capability": {"path": runtime["prefix"] + "/capability", "listed_paths": [item.get("key") for item in capability_list["objects"] if isinstance(item, dict)], **capability_list},
-            "evidence": {"path": runtime["prefix"] + "/evidence", "listed_paths": [item.get("key") for item in evidence_list["objects"] if isinstance(item, dict)], **evidence_list},
+            "root": {**root_list, "path": runtime["prefix"], "listed_paths": [item.get("key") for item in root_list["objects"] if isinstance(item, dict)]},
+            "capability": {**capability_list, "path": runtime["prefix"] + "/capability", "listed_paths": [item.get("key") for item in capability_list["objects"] if isinstance(item, dict)]},
+            "evidence": {**evidence_list, "path": runtime["prefix"] + "/evidence", "listed_paths": [item.get("key") for item in evidence_list["objects"] if isinstance(item, dict)]},
         }
         for descriptor in manifest["chunks"]:
             key = _prefix_bound(descriptor["key"], runtime["prefix"])
