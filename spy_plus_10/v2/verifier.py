@@ -18,6 +18,7 @@ from .evidence import (
     build_manifest,
     build_manifest_key,
     build_probe_keys,
+    canonical_json_bytes,
     decode_transport,
     encode_chunk,
     sha256_b64,
@@ -63,9 +64,7 @@ def _decimal(value: object) -> Decimal:
 
 
 def _read_statistics(backtest: object) -> object:
-    if not isinstance(backtest, Mapping):
-        raise ValueError("backtest")
-    candidate = backtest.get("backtest", backtest)
+    candidate = _unwrap_backtest(backtest)
     if not isinstance(candidate, Mapping):
         raise ValueError("backtest wrapper")
     for key in ("statistics", "runtimeStatistics", "runtime_statistics"):
@@ -73,6 +72,26 @@ def _read_statistics(backtest: object) -> object:
         if isinstance(value, Mapping):
             return value
     return None
+
+
+def _unwrap_backtest(backtest: object) -> Mapping:
+    if not isinstance(backtest, Mapping):
+        raise ValueError("backtest")
+    candidate = backtest.get("backtest", backtest)
+    if not isinstance(candidate, Mapping):
+        raise ValueError("backtest wrapper")
+    return candidate
+
+
+def _backtest_identity(backtest: object) -> dict | None:
+    try:
+        candidate = _unwrap_backtest(backtest)
+        backtest_id, project_id, organization_id = candidate.get("backtestId"), candidate.get("projectId"), candidate.get("organizationId")
+        if type(backtest_id) is not str or not backtest_id or type(project_id) is not int or isinstance(project_id, bool) or project_id < 0 or type(organization_id) is not str or not organization_id:
+            return None
+        return {"backtest_id": backtest_id, "project_id": project_id, "organization_id": organization_id}
+    except Exception:
+        return None
 
 
 def extract_runtime_statistics(backtest) -> dict:
@@ -123,7 +142,17 @@ def decode_manifest(raw) -> dict:
             raw = raw.encode("utf-8")
         if type(raw) is not bytes or not raw or len(raw) > MAX_MANIFEST_BYTES:
             return _result("UNVERIFIED", "MANIFEST_SIZE_OR_TYPE_INVALID")
-        value = json.loads(raw.decode("utf-8"))
+        def rejecting_pairs(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise KeyError("duplicate manifest key")
+                result[key] = item
+            return result
+        try:
+            value = json.loads(raw.decode("utf-8"), object_pairs_hook=rejecting_pairs)
+        except KeyError:
+            return _result("UNVERIFIED", "MANIFEST_DUPLICATE_KEY")
         if type(value) is not dict:
             return _result("UNVERIFIED", "MANIFEST_NOT_OBJECT")
         manifest = build_manifest(value.get("project_id"), value.get("frozen_commit"), value.get("run_label"),
@@ -133,6 +162,8 @@ def decode_manifest(raw) -> dict:
             return _result("UNVERIFIED", "MANIFEST_PROTOCOL_INVALID")
         if len(manifest["chunks"]) > MAX_ARCHIVE_OBJECTS:
             return _result("UNVERIFIED", "MANIFEST_TOO_MANY_CHUNKS")
+        if raw != canonical_json_bytes(manifest):
+            return _result("UNVERIFIED", "MANIFEST_NONCANONICAL_BYTES")
         return _result("PASS", **manifest)
     except Exception:
         return _result("UNVERIFIED", "MANIFEST_MALFORMED")
@@ -279,7 +310,7 @@ def _check_orders_and_trades(archive: Mapping, errors: list[str]) -> None:
         _add_error(errors, "ORDERS_OR_TRADES_NONEMPTY")
 
 
-def _validate_fetch_manifest(value: object, objects: Mapping, manifest: Mapping | None, orders: object, trades: object) -> list[str]:
+def _validate_fetch_manifest(value: object, objects: Mapping, manifest: Mapping | None, backtest_identity: dict | None, orders: object, trades: object) -> list[str]:
     """Bind the archive's recorded download provenance to its exact raw objects."""
     try:
         required = {"project_id", "backtest_id", "organization_id", "algorithm_id", "order_count", "trade_count", "downloaded_at_utc", "objects"}
@@ -314,6 +345,15 @@ def _validate_fetch_manifest(value: object, objects: Mapping, manifest: Mapping 
             _add_error(errors, "FETCH_MANIFEST_COUNTS_MISMATCH")
         if manifest is not None and (str(value["project_id"]) != manifest.get("project_id") or value["algorithm_id"] != manifest.get("algorithm_id")):
             _add_error(errors, "FETCH_MANIFEST_IDENTITY_MISMATCH")
+        if backtest_identity is None:
+            _add_error(errors, "BACKTEST_IDENTITY_UNAVAILABLE")
+        else:
+            if value["backtest_id"] != backtest_identity["backtest_id"]:
+                _add_error(errors, "FETCH_BACKTEST_ID_MISMATCH")
+            if value["project_id"] != backtest_identity["project_id"]:
+                _add_error(errors, "FETCH_PROJECT_ID_MISMATCH")
+            if value["organization_id"] != backtest_identity["organization_id"]:
+                _add_error(errors, "FETCH_ORGANIZATION_ID_MISMATCH")
         return errors
     except Exception:
         return ["FETCH_MANIFEST_MALFORMED"]
@@ -328,7 +368,8 @@ def _verify_archive(archive) -> dict:
     if not isinstance(objects, Mapping) or len(objects) > MAX_ARCHIVE_OBJECTS:
         _add_error(errors, "ARCHIVE_OBJECTS_INVALID")
         objects = {}
-    for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, None, archive.get("orders"), archive.get("trades")):
+    backtest_identity = _backtest_identity(archive.get("backtest"))
+    for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, None, backtest_identity, archive.get("orders"), archive.get("trades")):
         _add_error(errors, error)
     runtime = extract_runtime_statistics(archive.get("backtest"))
     if runtime["status"] != "PASS":
@@ -357,7 +398,7 @@ def _verify_archive(archive) -> dict:
         return {"overall_status": "UNVERIFIED", "errors": errors, "runtime": runtime,
                 "object_store": {"status": "UNVERIFIED", "string_round_trip": string_probe["status"], "bytes_round_trip": bytes_probe["status"]},
                 "attribution": {"reconciliation": "UNAVAILABLE"}}
-    for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, manifest_result, archive.get("orders"), archive.get("trades")):
+    for error in _validate_fetch_manifest(archive.get("fetch_manifest"), objects, manifest_result, backtest_identity, archive.get("orders"), archive.get("trades")):
         _add_error(errors, error)
     if manifest_result["transport"] != runtime["transport"]: _add_error(errors, "MANIFEST_TRANSPORT_MISMATCH")
     expected_prefix = f"{manifest_result['project_id']}/v2/{manifest_result['frozen_commit']}/{manifest_result['run_label']}/{manifest_result['algorithm_id']}"

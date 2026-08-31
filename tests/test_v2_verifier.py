@@ -90,7 +90,7 @@ def archive_fixture(*, fallback=False):
         "order_count": 0, "trade_count": 0, "downloaded_at_utc": "2026-08-31T00:00:00Z",
         "objects": [{"key": key, "bytes": len(value.encode("utf-8") if type(value) is str else value), "sha256": sha256_b64(value.encode("utf-8") if type(value) is str else value)} for key, value in objects.items()],
     }
-    return {"backtest": {"statistics": statistics}, "object_list": {"objects": listed, "object_storage_used": 4096},
+    return {"backtest": {"backtest": {"backtestId": "bt", "projectId": int(PROJECT), "organizationId": "org", "runtimeStatistics": statistics}}, "object_list": {"objects": listed, "object_storage_used": 4096},
             "orders": [], "trades": [], "objects": objects, "fetch_manifest": fetch_manifest}
 
 
@@ -123,7 +123,7 @@ class V2VerifierTests(unittest.TestCase):
         cases.append(missing)
         duplicate = archive_fixture(); duplicate["object_list"]["objects"].append(copy.deepcopy(duplicate["object_list"]["objects"][0]))
         cases.append(duplicate)
-        hash_wrong = archive_fixture(); hash_wrong["backtest"]["statistics"]["V2_STRING_SHA256"] = sha256_b64(b"wrong")
+        hash_wrong = archive_fixture(); hash_wrong["backtest"]["backtest"]["runtimeStatistics"]["V2_STRING_SHA256"] = sha256_b64(b"wrong")
         cases.append(hash_wrong)
         bad_date = archive_fixture(); chunk_key = next(key for key in bad_date["objects"] if key.endswith(".json.gz"));
         # Make malformed compressed content after a valid descriptor was recorded.
@@ -131,7 +131,7 @@ class V2VerifierTests(unittest.TestCase):
         cases.append(bad_date)
         nonempty_orders = archive_fixture(); nonempty_orders["orders"] = [{"id": 1}]
         cases.append(nonempty_orders)
-        malformed_runtime = archive_fixture(); malformed_runtime["backtest"]["statistics"]["V2_TRANSPORT"] = "bad"
+        malformed_runtime = archive_fixture(); malformed_runtime["backtest"]["backtest"]["runtimeStatistics"]["V2_TRANSPORT"] = "bad"
         cases.append(malformed_runtime)
         mismatch = archive_fixture(); manifest_key = next(key for key in mismatch["objects"] if key.endswith("manifest.json"));
         manifest = json.loads(mismatch["objects"][manifest_key]); manifest["transport"] = "base64-gzip-string"; mismatch["objects"][manifest_key] = canonical_json_bytes(manifest)
@@ -158,7 +158,7 @@ class V2VerifierTests(unittest.TestCase):
 
     def test_invalid_runtime_or_manifest_keeps_independent_diagnostics(self):
         archive = archive_fixture()
-        archive["backtest"]["statistics"]["V2_TRANSPORT"] = "bad"
+        archive["backtest"]["backtest"]["runtimeStatistics"]["V2_TRANSPORT"] = "bad"
         archive["object_list"]["objects"][0]["size"] = True
         archive["orders"] = [{"id": 1}]
         result = verify_archive(archive)
@@ -187,7 +187,7 @@ class V2VerifierTests(unittest.TestCase):
         self.assertEqual(recompute_attribution([daily_row("2015-01-02"), daily_row("2015-01-05")])["status"], "PASS")
 
     def test_runtime_extraction_accepts_real_backtest_wrappers_and_statistics_spellings(self):
-        statistics = archive_fixture()["backtest"]["statistics"]
+        statistics = archive_fixture()["backtest"]["backtest"]["runtimeStatistics"]
         for key in ("statistics", "runtimeStatistics", "runtime_statistics"):
             for response in ({key: statistics}, {"backtest": {key: statistics}}):
                 with self.subTest(key=key, response=response):
@@ -229,6 +229,26 @@ class V2VerifierTests(unittest.TestCase):
             result = verify_archive(changed)
             self.assertEqual(result["overall_status"], "UNVERIFIED")
             self.assertIn(code, result["errors"])
+
+    def test_fetch_manifest_ids_bind_to_real_wrapped_backtest_metadata(self):
+        archive = archive_fixture()
+        self.assertEqual(verify_archive(archive)["overall_status"], "PASS")
+        for field, code in (("backtest_id", "FETCH_BACKTEST_ID_MISMATCH"),
+                            ("project_id", "FETCH_PROJECT_ID_MISMATCH"),
+                            ("organization_id", "FETCH_ORGANIZATION_ID_MISMATCH")):
+            changed = copy.deepcopy(archive)
+            changed["fetch_manifest"][field] = "wrong" if field != "project_id" else 999
+            result = verify_archive(changed)
+            self.assertEqual(result["overall_status"], "UNVERIFIED")
+            self.assertIn(code, result["errors"])
+
+    def test_manifest_rejects_duplicate_keys_and_noncanonical_bytes(self):
+        archive = archive_fixture()
+        raw = next(value for key, value in archive["objects"].items() if key.endswith("manifest.json"))
+        duplicate = b'{"schema_version":2,' + raw[1:]
+        self.assertEqual(decode_manifest(duplicate)["errors"], ["MANIFEST_DUPLICATE_KEY"])
+        for candidate in (b" " + raw, json.dumps(json.loads(raw), indent=2).encode("utf-8")):
+            self.assertEqual(decode_manifest(candidate)["errors"], ["MANIFEST_NONCANONICAL_BYTES"])
 
 
 if __name__ == "__main__":
