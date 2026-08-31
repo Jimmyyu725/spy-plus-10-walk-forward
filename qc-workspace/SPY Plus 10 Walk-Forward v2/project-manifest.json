@@ -1,0 +1,11 @@
+{
+  "benchmark": "NONE",
+  "end_date": "2015-01-05",
+  "formal_evaluation": false,
+  "initial_cash": 1000000,
+  "language": "Python",
+  "live_trading": false,
+  "mode": "evidence-capability-smoke",
+  "name": "SPY Plus 10 Walk-Forward v2",
+  "start_date": "2015-01-02"
+}
