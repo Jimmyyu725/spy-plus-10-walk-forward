@@ -1,8 +1,90 @@
 import ast
+import contextlib
+import importlib.util
+import os
 import subprocess
 import sys
+import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from spy_plus_10.v2.evidence import (
+    build_manifest_key,
+    build_probe_keys,
+)
+
+
+COMMIT = "a" * 40
+PROJECT = "project"
+RUN_LABEL = "run"
+ALGORITHM = "algorithm"
+
+
+class FakeObjectStore:
+    def __init__(self, *, false_suffix=None, type_error_suffix=None, mismatch_suffix=None):
+        self.values = {}
+        self.writes = []
+        self.false_suffix = false_suffix
+        self.type_error_suffix = type_error_suffix
+        self.mismatch_suffix = mismatch_suffix
+
+    def contains_key(self, key):
+        return key in self.values
+
+    def save(self, key, value):
+        self.writes.append(("string", key))
+        if key.endswith(self.false_suffix or "\0"):
+            return False
+        self.values[key] = value
+        return True
+
+    def read(self, key):
+        return self.values[key]
+
+    def save_bytes(self, key, value):
+        self.writes.append(("bytes", key))
+        if key.endswith(self.type_error_suffix or "\0"):
+            raise TypeError("unexpected Object Store binding error")
+        if key.endswith(self.false_suffix or "\0"):
+            return False
+        self.values[key] = bytes(value)
+        return True
+
+    def read_bytes(self, key):
+        value = self.values[key]
+        if key.endswith(self.mismatch_suffix or "\0"):
+            return b"mismatch"
+        return value
+
+
+class FakeQCAlgorithm:
+    next_store = None
+
+    def __init__(self):
+        self.object_store = type(self).next_store
+        self.algorithm_id = ALGORITHM
+        self.project_id = PROJECT
+        self.statistics = {}
+
+    def set_start_date(self, *args):
+        self.start_date = args
+
+    def set_end_date(self, *args):
+        self.end_date = args
+
+    def set_cash(self, value):
+        self.cash = value
+
+    def get_parameter(self, name):
+        return {"v2_git_commit": COMMIT, "evidence_run_label": RUN_LABEL}[name]
+
+    def debug(self, message):
+        self.debug_message = message
+
+    def set_runtime_statistic(self, key, value):
+        self.statistics[key] = value
 
 
 class V2CloudSyncTests(unittest.TestCase):
@@ -10,6 +92,32 @@ class V2CloudSyncTests(unittest.TestCase):
         self.root = Path(__file__).resolve().parents[1]
         self.cloud = self.root / "qc-workspace" / "SPY Plus 10 Walk-Forward v2"
         self.canonical = self.root / "spy_plus_10" / "v2"
+
+    @contextlib.contextmanager
+    def load_cloud_main(self, store):
+        algorithm_imports = types.ModuleType("AlgorithmImports")
+        algorithm_imports.QCAlgorithm = FakeQCAlgorithm
+        module_name = "v2_cloud_main_test_module"
+        previous_evidence = sys.modules.pop("evidence", None)
+        previous_main = sys.modules.pop(module_name, None)
+        FakeQCAlgorithm.next_store = store
+        sys.path.insert(0, str(self.cloud))
+        try:
+            with mock.patch.dict(sys.modules, {"AlgorithmImports": algorithm_imports}):
+                spec = importlib.util.spec_from_file_location(module_name, self.cloud / "main.py")
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+                yield module.SpyPlusTenV2EvidenceCapability()
+        finally:
+            sys.path.pop(0)
+            sys.modules.pop("evidence", None)
+            sys.modules.pop(module_name, None)
+            if previous_evidence is not None:
+                sys.modules["evidence"] = previous_evidence
+            if previous_main is not None:
+                sys.modules[module_name] = previous_main
+            FakeQCAlgorithm.next_store = None
 
     def test_cloud_pure_modules_match_canonical_sources(self):
         for name in ("evidence.py", "attribution.py"):
@@ -19,17 +127,160 @@ class V2CloudSyncTests(unittest.TestCase):
                     (self.canonical / name).read_bytes(),
                 )
 
-    def test_sync_script_repairs_a_cloud_copy_from_canonical_source(self):
+    def test_sync_script_repairs_a_cloud_copy_from_temporary_canonical_source(self):
         from scripts.sync_v2_cloud_modules import sync_modules
 
-        cloud_evidence = self.cloud / "evidence.py"
-        original = cloud_evidence.read_bytes()
-        try:
-            cloud_evidence.write_bytes(b"drift\n")
-            self.assertEqual(sync_modules(), ("evidence.py", "attribution.py"))
-            self.assertEqual(cloud_evidence.read_bytes(), (self.canonical / "evidence.py").read_bytes())
-        finally:
-            cloud_evidence.write_bytes(original)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            target.mkdir()
+            (source / "evidence.py").write_bytes(b"new evidence\n")
+            (source / "attribution.py").write_bytes(b"new attribution\n")
+            (target / "evidence.py").write_bytes(b"old evidence\n")
+            (target / "attribution.py").write_bytes(b"old attribution\n")
+
+            self.assertEqual(
+                sync_modules(source=source, target=target),
+                ("evidence.py", "attribution.py"),
+            )
+            self.assertEqual((target / "evidence.py").read_bytes(), b"new evidence\n")
+            self.assertEqual((target / "attribution.py").read_bytes(), b"new attribution\n")
+
+    def test_sync_preflight_missing_second_source_never_changes_temporary_target(self):
+        from scripts.sync_v2_cloud_modules import sync_modules
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            target.mkdir()
+            (source / "evidence.py").write_bytes(b"new evidence\n")
+            (target / "evidence.py").write_bytes(b"old evidence\n")
+            (target / "attribution.py").write_bytes(b"old attribution\n")
+
+            with self.assertRaisesRegex(RuntimeError, "attribution.py"):
+                sync_modules(source=source, target=target)
+            self.assertEqual((target / "evidence.py").read_bytes(), b"old evidence\n")
+            self.assertEqual((target / "attribution.py").read_bytes(), b"old attribution\n")
+            self.assertEqual(list(target.glob(".*.sync.tmp")), [])
+
+    def test_sync_replace_failure_restores_temporary_target_without_half_sync(self):
+        from scripts import sync_v2_cloud_modules
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            target.mkdir()
+            (source / "evidence.py").write_bytes(b"new evidence\n")
+            (source / "attribution.py").write_bytes(b"new attribution\n")
+            (target / "evidence.py").write_bytes(b"old evidence\n")
+            (target / "attribution.py").write_bytes(b"old attribution\n")
+            real_replace = os.replace
+            failed = False
+
+            def fail_second_replace(source_path, target_path):
+                nonlocal failed
+                if Path(target_path) == target / "attribution.py" and not failed:
+                    failed = True
+                    raise OSError("staged replace failed")
+                return real_replace(source_path, target_path)
+
+            with mock.patch.object(sync_v2_cloud_modules.os, "replace", side_effect=fail_second_replace):
+                with self.assertRaisesRegex(RuntimeError, "atomic sync failed"):
+                    sync_v2_cloud_modules.sync_modules(source=source, target=target)
+            self.assertEqual((target / "evidence.py").read_bytes(), b"old evidence\n")
+            self.assertEqual((target / "attribution.py").read_bytes(), b"old attribution\n")
+            self.assertEqual(list(target.glob(".*.sync.tmp")), [])
+
+    def test_cloud_main_success_records_pass_statuses(self):
+        store = FakeObjectStore()
+        with self.load_cloud_main(store) as algorithm:
+            algorithm.initialize()
+            algorithm.on_end_of_algorithm()
+
+        self.assertEqual(algorithm._status, {
+            "string": "PASS", "bytes": "PASS", "chunk": "PASS", "manifest": "PASS",
+        })
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS")
+        self.assertEqual(algorithm.statistics["V2_TRANSPORT"], "bytes")
+
+    def test_cloud_main_expected_bytes_failure_uses_string_fallback(self):
+        store = FakeObjectStore(false_suffix="capability/bytes-1kb.bin")
+        with self.load_cloud_main(store) as algorithm:
+            algorithm.initialize()
+            algorithm.on_end_of_algorithm()
+
+        self.assertEqual(algorithm._status, {
+            "string": "PASS", "bytes": "FAIL", "chunk": "PASS", "manifest": "PASS",
+        })
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS_WITH_STRING_FALLBACK")
+        self.assertEqual(algorithm.statistics["V2_TRANSPORT"], "base64-gzip-string")
+
+    def test_cloud_main_type_error_does_not_fallback(self):
+        store = FakeObjectStore(type_error_suffix="capability/bytes-1kb.bin")
+        with self.load_cloud_main(store) as algorithm:
+            with self.assertRaisesRegex(TypeError, "binding error"):
+                algorithm.initialize()
+            algorithm.on_end_of_algorithm()
+
+        self.assertEqual(algorithm._status, {
+            "string": "PASS", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+        })
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
+        self.assertEqual(len(store.writes), 2)
+
+    def test_cloud_main_existing_key_performs_zero_writes(self):
+        store = FakeObjectStore()
+        manifest_key = build_manifest_key(PROJECT, COMMIT, RUN_LABEL, ALGORITHM)
+        store.values[manifest_key] = "already present"
+        with self.load_cloud_main(store) as algorithm:
+            with self.assertRaisesRegex(RuntimeError, "OBJECT_STORE_KEY_EXISTS"):
+                algorithm.initialize()
+            algorithm.on_end_of_algorithm()
+
+        self.assertEqual(store.writes, [])
+        self.assertEqual(algorithm._status, {
+            "string": "UNVERIFIED", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+        })
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
+
+    def test_cloud_main_string_chunk_and_manifest_failures_remain_unverified(self):
+        cases = (
+            ("string", FakeObjectStore(false_suffix="capability/string-1kb.txt"), {
+                "string": "UNVERIFIED", "bytes": "UNVERIFIED", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+            }),
+            ("chunk", FakeObjectStore(false_suffix="evidence/2015.json.gz"), {
+                "string": "PASS", "bytes": "PASS", "chunk": "UNVERIFIED", "manifest": "UNVERIFIED",
+            }),
+            ("manifest", FakeObjectStore(false_suffix="manifest.json"), {
+                "string": "PASS", "bytes": "PASS", "chunk": "PASS", "manifest": "UNVERIFIED",
+            }),
+        )
+        for label, store, expected_status in cases:
+            with self.subTest(label=label), self.load_cloud_main(store) as algorithm:
+                with self.assertRaises(RuntimeError):
+                    algorithm.initialize()
+                algorithm.on_end_of_algorithm()
+                self.assertEqual(algorithm._status, expected_status)
+                self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "UNVERIFIED")
+
+    def test_cloud_main_persisted_bytes_mismatch_falls_back_but_records_bytes_failure(self):
+        store = FakeObjectStore(mismatch_suffix="capability/bytes-1kb.bin")
+        probes = build_probe_keys(PROJECT, COMMIT, RUN_LABEL, ALGORITHM)
+        with self.load_cloud_main(store) as algorithm:
+            algorithm.initialize()
+            algorithm.on_end_of_algorithm()
+
+        self.assertIn(probes["bytes"], store.values)
+        self.assertEqual(algorithm._status, {
+            "string": "PASS", "bytes": "FAIL", "chunk": "PASS", "manifest": "PASS",
+        })
+        self.assertEqual(algorithm.statistics["V2_CAPABILITY_STATUS"], "PASS_WITH_STRING_FALLBACK")
 
     def test_cloud_attribution_supports_top_level_evidence_import(self):
         result = subprocess.run(
@@ -42,6 +293,27 @@ class V2CloudSyncTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("defensive_option", result.stdout)
+
+    def test_attribution_preserves_an_internal_relative_evidence_import_error(self):
+        source = (self.canonical / "attribution.py").read_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "package"
+            package.mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "attribution.py").write_bytes(source)
+            (package / "evidence.py").write_text(
+                'raise ImportError("inside evidence")\n', encoding="utf-8"
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", "import package.attribution"],
+                cwd=directory,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(result.stderr.rstrip().endswith("ImportError: inside evidence"), result.stderr)
 
     def test_main_source_has_exact_capability_contract(self):
         source = (self.cloud / "main.py").read_text(encoding="utf-8")

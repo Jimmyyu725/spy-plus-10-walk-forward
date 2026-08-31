@@ -14,6 +14,10 @@ from evidence import (
 )
 
 
+class BytesCapabilityError(RuntimeError):
+    """Raised only for expected bytes Object Store capability failures."""
+
+
 class SpyPlusTenV2EvidenceCapability(QCAlgorithm):
     def initialize(self) -> None:
         self.set_start_date(2015, 1, 2)
@@ -47,11 +51,18 @@ class SpyPlusTenV2EvidenceCapability(QCAlgorithm):
     def _save_unique_bytes(self, key: str, value: bytes) -> None:
         if self.object_store.contains_key(key):
             raise RuntimeError(f"OBJECT_STORE_KEY_EXISTS:{key}")
-        if not self.object_store.save_bytes(key, value):
-            raise RuntimeError(f"OBJECT_STORE_BYTES_SAVE_FAILED:{key}")
-        round_trip = bytes(self.object_store.read_bytes(key))
+        try:
+            saved = self.object_store.save_bytes(key, value)
+        except NotImplementedError as error:
+            raise BytesCapabilityError(f"OBJECT_STORE_BYTES_UNSUPPORTED:{key}") from error
+        if not saved:
+            raise BytesCapabilityError(f"OBJECT_STORE_BYTES_SAVE_FAILED:{key}")
+        try:
+            round_trip = bytes(self.object_store.read_bytes(key))
+        except NotImplementedError as error:
+            raise BytesCapabilityError(f"OBJECT_STORE_BYTES_UNSUPPORTED:{key}") from error
         if round_trip != value or sha256_b64(round_trip) != sha256_b64(value):
-            raise RuntimeError(f"OBJECT_STORE_BYTES_ROUND_TRIP_FAILED:{key}")
+            raise BytesCapabilityError(f"OBJECT_STORE_BYTES_ROUND_TRIP_FAILED:{key}")
 
     def _synthetic_row(self, day: str) -> dict:
         sleeves = {
@@ -164,9 +175,7 @@ class SpyPlusTenV2EvidenceCapability(QCAlgorithm):
         try:
             self._save_unique_bytes(probes["bytes"], bytes_value)
             self._status["bytes"] = "PASS"
-        except Exception as error:
-            if str(error).startswith("OBJECT_STORE_KEY_EXISTS:"):
-                raise
+        except BytesCapabilityError as error:
             self._status["bytes"] = "FAIL"
             self.debug(f"BYTES_PROBE_FAILED:{type(error).__name__}")
             transport = "base64-gzip-string"

@@ -16,9 +16,9 @@ from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Mapping
 
-try:
+if __package__:
     from .evidence import RUN_VARIANTS, SLEEVES
-except ImportError:
+else:
     from evidence import RUN_VARIANTS, SLEEVES
 
 
